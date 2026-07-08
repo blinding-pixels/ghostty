@@ -79,6 +79,10 @@ extension Ghostty {
         // Cancellable for the debounced accessibility selection-change post.
         private var accessibilitySelectionCancellable: AnyCancellable?
 
+        // KVO observer for VoiceOver status. The core accessibility pipeline
+        // stays disabled unless VoiceOver is running.
+        private var accessibilityVoiceOverObservation: NSKeyValueObservation?
+
         // Whether the pointer should be visible or not
         @Published private(set) var pointerStyle: CursorStyle = .horizontalText
 
@@ -209,12 +213,21 @@ extension Ghostty {
         // by the user, this is set to the prior value (which may be empty, but non-nil).
         private var titleFromTerminal: String?
 
-        // The cached contents of the screen.
+        // The cached VoiceOver text projection over Zig terminal state.
+        var cachedAccessibilityTextProjection: CachedValue<AccessibilityTextProjection>
         private(set) var cachedScreenContents: CachedValue<String>
         private(set) var cachedVisibleContents: CachedValue<String>
 
         /// Event monitor (see individual events for why)
         private var eventMonitor: Any?
+        var accessibilityTextUpdateWorkItem: DispatchWorkItem?
+        var lastAccessibilityAlternateScreen = false
+        var lastAccessibilityNotifiedGeneration = -1
+        var lastAccessibilityProjectionGeneration = -1
+        var lastAccessibilityNotifiedProjection: AccessibilityTextProjection?
+        var accessibilityReviewSelectedRange: NSRange?
+
+        static let accessibilityTextUpdateDelay: DispatchTimeInterval = .milliseconds(35)
 
         // We need to support being a first responder so that we can get input events
         override var acceptsFirstResponder: Bool { return true }
@@ -232,6 +245,7 @@ extension Ghostty {
             // We need to initialize this so it does something but we want to set
             // it back up later so we can reference `self`. This is a hack we should
             // fix at some point.
+            self.cachedAccessibilityTextProjection = .init(duration: .milliseconds(500)) { .empty }
             self.cachedScreenContents = .init(duration: .milliseconds(500)) { "" }
             self.cachedVisibleContents = self.cachedScreenContents
 
@@ -241,45 +255,14 @@ extension Ghostty {
             super.init(id: uuid, frame: NSRect(x: 0, y: 0, width: 800, height: 600))
 
             // Our cache of screen data
+            cachedAccessibilityTextProjection = .init(duration: .milliseconds(500)) { [weak self] in
+                self?.readAccessibilityTextProjection() ?? .empty
+            }
             cachedScreenContents = .init(duration: .milliseconds(500)) { [weak self] in
-                guard let self else { return "" }
-                guard let surface = self.surface else { return "" }
-                var text = ghostty_text_s()
-                let sel = ghostty_selection_s(
-                    top_left: ghostty_point_s(
-                        tag: GHOSTTY_POINT_SCREEN,
-                        coord: GHOSTTY_POINT_COORD_TOP_LEFT,
-                        x: 0,
-                        y: 0),
-                    bottom_right: ghostty_point_s(
-                        tag: GHOSTTY_POINT_SCREEN,
-                        coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
-                        x: 0,
-                        y: 0),
-                    rectangle: false)
-                guard ghostty_surface_read_text(surface, sel, &text) else { return "" }
-                defer { ghostty_surface_free_text(surface, &text) }
-                return String(cString: text.text)
+                self?.cachedAccessibilityTextProjection.get().text ?? ""
             }
             cachedVisibleContents = .init(duration: .milliseconds(500)) { [weak self] in
-                guard let self else { return "" }
-                guard let surface = self.surface else { return "" }
-                var text = ghostty_text_s()
-                let sel = ghostty_selection_s(
-                    top_left: ghostty_point_s(
-                        tag: GHOSTTY_POINT_VIEWPORT,
-                        coord: GHOSTTY_POINT_COORD_TOP_LEFT,
-                        x: 0,
-                        y: 0),
-                    bottom_right: ghostty_point_s(
-                        tag: GHOSTTY_POINT_VIEWPORT,
-                        coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
-                        x: 0,
-                        y: 0),
-                    rectangle: false)
-                guard ghostty_surface_read_text(surface, sel, &text) else { return "" }
-                defer { ghostty_surface_free_text(surface, &text) }
-                return String(cString: text.text)
+                self?.cachedAccessibilityTextProjection.get().visibleText ?? ""
             }
 
             // Set a timer to show the ghost emoji after 500ms if no title is set
@@ -302,7 +285,12 @@ extension Ghostty {
                 .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
                 .sink { [weak self] _ in
                     guard let self else { return }
-                    NSAccessibility.post(element: self, notification: .selectedTextChanged)
+                    NSAccessibility.post(
+                        element: self,
+                        notification: .selectedTextChanged,
+                        userInfo: self.accessibilitySelectedTextChangedUserInfo(
+                            changeType: AccessibilityTextNotification.TextStateChangeType.unknown,
+                            focusChanged: false))
                 }
 
             // Before we initialize the surface we want to register our notifications
@@ -376,6 +364,15 @@ extension Ghostty {
             }
             self.surfaceModel = Ghostty.Surface(cSurface: surface)
 
+            accessibilityVoiceOverObservation = NSWorkspace.shared.observe(
+                \.isVoiceOverEnabled,
+                options: [.initial, .new]
+            ) { [weak self] _, _ in
+                DispatchQueue.main.async {
+                    self?.updateAccessibilityEnabledState()
+                }
+            }
+
             // Setup our tracking area so we get mouse moved events
             updateTrackingAreas()
 
@@ -388,6 +385,9 @@ extension Ghostty {
         }
 
         deinit {
+            accessibilityTextUpdateWorkItem?.cancel()
+            accessibilityVoiceOverObservation?.invalidate()
+
             // Remove all of our notificationcenter subscriptions
             let center = NotificationCenter.default
             center.removeObserver(self)
@@ -1076,6 +1076,7 @@ extension Ghostty {
         }
 
         override func keyDown(with event: NSEvent) {
+
             guard let surface = self.surface else {
                 self.interpretKeyEvents([event])
                 return
@@ -1280,6 +1281,7 @@ extension Ghostty {
 
         /// Special case handling for some control keys
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
+
             // We only care about key down events. It might not even be possible
             // to receive any other event type here.
             guard event.type == .keyDown else { return false }
@@ -1316,7 +1318,7 @@ extension Ghostty {
                    bindingFlags.isDisjoint(with: [.all, .performable]),
                    bindingFlags.contains(.consumed) {
                     if let appDelegate = NSApp.delegate as? AppDelegate,
-                       appDelegate.performGhosttyBindingMenuKeyEquivalent(with: event) {
+                        appDelegate.performGhosttyBindingMenuKeyEquivalent(with: event) {
                         return true
                     }
                 }
@@ -1464,15 +1466,18 @@ extension Ghostty {
             // For text, we only encode UTF8 if we don't have a single control
             // character. Control characters are encoded by Ghostty itself.
             // Without this, `ctrl+enter` does the wrong thing.
+            let handled: Bool
             if let text, text.count > 0,
                let codepoint = text.utf8.first, codepoint >= 0x20 {
-                return text.withCString { ptr in
+                handled = text.withCString { ptr in
                     key_ev.text = ptr
                     return ghostty_surface_key(surface, key_ev)
                 }
             } else {
-                return ghostty_surface_key(surface, key_ev)
+                handled = ghostty_surface_key(surface, key_ev)
             }
+
+            return handled
         }
 
         private func shouldReplayCommittedPreeditKey(_ event: NSEvent) -> Bool {
@@ -1504,10 +1509,12 @@ extension Ghostty {
             key_ev.consumed_mods = GHOSTTY_MODS_NONE
             key_ev.unshifted_codepoint = 0
 
-            return text.withCString { ptr in
+            let handled = text.withCString { ptr in
                 key_ev.text = ptr
                 return ghostty_surface_key(surface, key_ev)
             }
+
+            return handled
         }
 
         override func quickLook(with event: NSEvent) {
@@ -1873,7 +1880,6 @@ extension Ghostty {
         }
     }
 }
-
 // MARK: - NSTextInputClient
 
 extension Ghostty.SurfaceView: NSTextInputClient {
@@ -2027,8 +2033,6 @@ extension Ghostty.SurfaceView: NSTextInputClient {
     }
 
     func insertText(_ string: Any, replacementRange: NSRange) {
-        // We must have an associated event
-        guard NSApp.currentEvent != nil else { return }
         guard let surfaceModel else { return }
 
         // We want the string view of the any value
@@ -2053,13 +2057,14 @@ extension Ghostty.SurfaceView: NSTextInputClient {
             return
         }
 
-        surfaceModel.sendText(chars)
+        surfaceModel.sendInputText(chars)
     }
 
     /// This function needs to exist for two reasons:
     /// 1. Prevents an audible NSBeep for unimplemented actions.
     /// 2. Allows us to properly encode super+key input events that we don't handle
     override func doCommand(by selector: Selector) {
+
         // If we are being processed by performKeyEquivalent with a command binding,
         // we send it back through the event system so it can be encoded.
         if let lastPerformKeyEvent,
@@ -2261,160 +2266,11 @@ extension Ghostty.SurfaceView {
 
         if let content {
             DispatchQueue.main.async {
-                self.insertText(
-                    content,
-                    replacementRange: NSRange(location: 0, length: 0)
-                )
+                self.surfaceModel?.sendText(content)
             }
             return true
         }
 
         return false
-    }
-}
-
-// MARK: Accessibility
-
-extension Ghostty.SurfaceView {
-    /// Indicates that this view should be exposed to accessibility tools like VoiceOver.
-    /// By returning true, we make the terminal surface accessible to screen readers
-    /// and other assistive technologies.
-    override func isAccessibilityElement() -> Bool {
-         return true
-     }
-
-    /// Defines the accessibility role for this view, which helps assistive technologies
-    /// understand what kind of content this view contains and how users can interact with it.
-    override func accessibilityRole() -> NSAccessibility.Role? {
-        /// We use .textArea because the terminal surface is essentially an editable text area
-        /// where users can input commands and view output.
-        return .textArea
-    }
-
-    override func accessibilityHelp() -> String? {
-        return "Terminal content area"
-    }
-
-    override func accessibilityValue() -> Any? {
-        return cachedScreenContents.get()
-    }
-
-    /// Returns the range of text that is currently selected in the terminal.
-    /// This allows VoiceOver and other assistive technologies to understand
-    /// what text the user has selected.
-    override func accessibilitySelectedTextRange() -> NSRange {
-        return selectedRange()
-    }
-
-    /// Returns the currently selected text as a string.
-    /// This allows assistive technologies to read the selected content.
-    override func accessibilitySelectedText() -> String? {
-        guard let surface = self.surface else { return nil }
-
-        // Attempt to read the selection
-        var text = ghostty_text_s()
-        guard ghostty_surface_read_selection(surface, &text) else { return nil }
-        defer { ghostty_surface_free_text(surface, &text) }
-
-        let str = String(cString: text.text)
-        return str.isEmpty ? nil : str
-    }
-
-    /// Returns the number of characters in the terminal content.
-    /// This helps assistive technologies understand the size of the content.
-    override func accessibilityNumberOfCharacters() -> Int {
-        let content = cachedScreenContents.get()
-        return content.count
-    }
-
-    /// Returns the visible character range for the terminal.
-    /// For terminals, we typically show all content as visible.
-    override func accessibilityVisibleCharacterRange() -> NSRange {
-        let content = cachedScreenContents.get()
-        return NSRange(location: 0, length: content.count)
-    }
-
-    /// Returns the line number for a given character index.
-    /// This helps assistive technologies navigate by line.
-    override func accessibilityLine(for index: Int) -> Int {
-        let content = cachedScreenContents.get()
-        let substring = String(content.prefix(index))
-        return substring.components(separatedBy: .newlines).count - 1
-    }
-
-    /// Returns a substring for the given range.
-    /// This allows assistive technologies to read specific portions of the content.
-    override func accessibilityString(for range: NSRange) -> String? {
-        let content = cachedScreenContents.get()
-        guard let swiftRange = Range(range, in: content) else { return nil }
-        return String(content[swiftRange])
-    }
-
-    /// Returns an attributed string for the given range.
-    ///
-    /// Note: right now this only applies font information. One day it'd be nice to extend
-    /// this to copy styling information as well but we need to augment Ghostty core to
-    /// expose that.
-    ///
-    /// This provides styling information to assistive technologies.
-    override func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {
-        guard let surface = self.surface else { return nil }
-        guard let plainString = accessibilityString(for: range) else { return nil }
-
-        var attributes: [NSAttributedString.Key: Any] = [:]
-
-        // Try to get the font from the surface
-        if let fontRaw = ghostty_surface_quicklook_font(surface) {
-            let font = Unmanaged<CTFont>.fromOpaque(fontRaw)
-            attributes[.font] = font.takeUnretainedValue()
-            font.release()
-        }
-
-        return NSAttributedString(string: plainString, attributes: attributes)
-    }
-
-}
-
-/// Caches a value for some period of time, evicting it automatically when that time expires.
-/// We use this to cache our surface content. This probably should be extracted some day
-/// to a more generic helper.
-class CachedValue<T> {
-    private var value: T?
-    private let fetch: () -> T
-    private let duration: Duration
-    private var expiryTask: Task<Void, Never>?
-
-    init(duration: Duration, fetch: @escaping () -> T) {
-        self.duration = duration
-        self.fetch = fetch
-    }
-
-    deinit {
-        expiryTask?.cancel()
-    }
-
-    func get() -> T {
-        if let value {
-            return value
-        }
-
-        // We don't have a value (or it expired). Fetch and store.
-        let result = fetch()
-        let now = ContinuousClock.now
-        let expires = now + duration
-        self.value = result
-
-        // Schedule a task to clear the value
-        expiryTask = Task { [weak self] in
-            do {
-                try await Task.sleep(until: expires)
-                self?.value = nil
-                self?.expiryTask = nil
-            } catch {
-                // Task was cancelled, do nothing
-            }
-        }
-
-        return result
     }
 }

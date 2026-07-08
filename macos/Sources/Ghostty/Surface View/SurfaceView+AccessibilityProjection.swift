@@ -40,4 +40,79 @@ extension Ghostty.SurfaceView {
 
         return ScreenChangeInfo(change)
     }
+    func invalidateAccessibilityTextProjection() {
+        cachedAccessibilityTextProjection.invalidate()
+        cachedScreenContents.invalidate()
+        cachedVisibleContents.invalidate()
+        accessibilityReviewSelectedRange = nil
+    }
+
+    func currentAccessibilityTextProjection() -> AccessibilityTextProjection {
+        let changeInfo = readScreenChangeInfo()
+        _ = announceAccessibilityChange(changeInfo)
+
+        if changeInfo.generation != lastAccessibilityProjectionGeneration {
+            lastAccessibilityProjectionGeneration = changeInfo.generation
+            invalidateAccessibilityTextProjection()
+        }
+
+        return cachedAccessibilityTextProjection.get()
+    }
+    static func accessibilityEffectiveSelectedRange(
+        in projection: AccessibilityTextProjection
+    ) -> NSRange {
+        projection.selectionRange ?? projection.cursorRange
+    }
+
+    static func accessibilityRangeEqual(_ lhs: NSRange, _ rhs: NSRange) -> Bool {
+        lhs.location == rhs.location && lhs.length == rhs.length
+    }
+    func accessibilityTextEditDiff(
+        oldText: String,
+        newText: String
+    ) -> AccessibilityTextEditDiff? {
+        let oldUnits = Array(oldText.utf16)
+        let newUnits = Array(newText.utf16)
+        guard oldUnits != newUnits else { return nil }
+
+        let sharedCount = min(oldUnits.count, newUnits.count)
+        var prefix = 0
+        while prefix < sharedCount &&
+            accessibilityUTF16UnitsEqual(oldUnits[prefix], newUnits[prefix]) {
+            prefix += 1
+        }
+
+        var suffix = 0
+        while prefix + suffix < oldUnits.count &&
+            prefix + suffix < newUnits.count &&
+            accessibilityUTF16UnitsEqual(
+                oldUnits[oldUnits.count - suffix - 1],
+                newUnits[newUnits.count - suffix - 1]) {
+            suffix += 1
+        }
+
+        let deletedRange = NSRange(
+            location: prefix,
+            length: oldUnits.count - prefix - suffix)
+        let insertedRange = NSRange(
+            location: prefix,
+            length: newUnits.count - prefix - suffix)
+
+        return AccessibilityTextEditDiff(
+            deletedText: deletedRange.length > 0
+                ? (oldText as NSString).substring(with: deletedRange)
+                : "",
+            insertedText: insertedRange.length > 0
+                ? (newText as NSString).substring(with: insertedRange)
+                : "")
+    }
+
+    func accessibilityUTF16UnitsEqual(_ lhs: UInt16, _ rhs: UInt16) -> Bool {
+        if lhs == rhs { return true }
+        guard let lhsScalar = UnicodeScalar(Int(lhs)),
+              let rhsScalar = UnicodeScalar(Int(rhs)) else { return false }
+
+        let whitespace = CharacterSet.whitespacesAndNewlines
+        return whitespace.contains(lhsScalar) && whitespace.contains(rhsScalar)
+    }
 }

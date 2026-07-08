@@ -905,6 +905,13 @@ pub const Surface = struct {
         };
     }
 
+    pub fn inputTextCallback(self: *Surface, text: []const u8) void {
+        _ = self.core_surface.inputTextCallback(text) catch |err| {
+            log.err("error in input text callback err={}", .{err});
+            return;
+        };
+    }
+
     pub fn focusCallback(self: *Surface, focused: bool) void {
         self.core_surface.focusCallback(focused) catch |err| {
             log.err("error in focus callback err={}", .{err});
@@ -1920,6 +1927,15 @@ pub const CAPI = struct {
         len: usize,
     ) void {
         surface.textCallback(ptr[0..len]);
+    }
+
+    /// Send text input to the terminal without bracketed-paste framing.
+    export fn ghostty_surface_input_text(
+        surface: *Surface,
+        ptr: [*]const u8,
+        len: usize,
+    ) void {
+        surface.inputTextCallback(ptr[0..len]);
     }
 
     /// Set the preedit text for the surface. This is used for IME

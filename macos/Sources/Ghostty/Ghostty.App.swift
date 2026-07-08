@@ -641,6 +641,9 @@ extension Ghostty {
             case GHOSTTY_ACTION_SCROLLBAR:
                 scrollbar(app, target: target, v: action.action.scrollbar)
 
+            case GHOSTTY_ACTION_SCREEN_CHANGED:
+                screenChanged(app, target: target, v: action.action.screen_changed)
+
             case GHOSTTY_ACTION_CLOSE_ALL_WINDOWS:
                 closeAllWindows(app, target: target)
 
@@ -1450,7 +1453,6 @@ extension Ghostty {
             case GHOSTTY_TARGET_SURFACE:
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
-
                 // Determine if we even care about command finish notifications
                 guard let config = (NSApplication.shared.delegate as? AppDelegate)?.ghostty.config else { return }
                 switch config.notifyOnCommandFinish {
@@ -2063,6 +2065,26 @@ extension Ghostty {
                         SwiftUI.Notification.Name.ScrollbarKey: scrollbar
                     ]
                 )
+
+            default:
+                assertionFailure()
+            }
+        }
+
+        private static func screenChanged(
+            _ app: ghostty_app_t,
+            target: ghostty_target_s,
+            v: ghostty_action_screen_changed_s) {
+            switch target.tag {
+            case GHOSTTY_TARGET_APP:
+                Ghostty.logger.warning("screen changed does nothing with an app target")
+                return
+
+            case GHOSTTY_TARGET_SURFACE:
+                guard let surface = target.target.surface else { return }
+                guard let surfaceView = self.surfaceView(from: surface) else { return }
+
+                surfaceView.accessibilityScreenChanged(Ghostty.Action.ScreenChanged(c: v))
 
             default:
                 assertionFailure()

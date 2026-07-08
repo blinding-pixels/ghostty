@@ -1,0 +1,167 @@
+import AppKit
+import GhosttyKit
+
+extension Ghostty.SurfaceView {
+    func updateAccessibilityEnabledState() {
+        guard let surface else { return }
+
+        let enabled = NSWorkspace.shared.isVoiceOverEnabled
+        ghostty_surface_set_accessibility_enabled(surface, enabled)
+        accessibilityTextUpdateWorkItem?.cancel()
+        lastAccessibilityNotifiedProjection = nil
+        invalidateAccessibilityTextProjection()
+
+        if enabled {
+            let projection = readAccessibilityTextProjection()
+            lastAccessibilityNotifiedGeneration = projection.changeInfo.generation
+            lastAccessibilityProjectionGeneration = projection.changeInfo.generation
+            lastAccessibilityNotifiedProjection = projection
+        } else {
+            lastAccessibilityNotifiedGeneration = -1
+            lastAccessibilityProjectionGeneration = -1
+        }
+    }
+
+    func accessibilityScreenChanged(_ change: Ghostty.Action.ScreenChanged) {
+        scheduleAccessibilityTextUpdate(ScreenChangeInfo(change))
+    }
+
+    func scheduleAccessibilityTextUpdate(_ changeInfo: ScreenChangeInfo? = nil) {
+        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        guard window?.firstResponder === self else { return }
+
+        accessibilityTextUpdateWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.window?.firstResponder === self else { return }
+
+            let resolvedChangeInfo = changeInfo ?? self.readScreenChangeInfo()
+            self.accessibilityTextUpdateWorkItem = nil
+            _ = self.announceAccessibilityChange(resolvedChangeInfo)
+            self.notifyAccessibilityProjectionIfNeeded(resolvedChangeInfo)
+        }
+        accessibilityTextUpdateWorkItem = workItem
+
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.accessibilityTextUpdateDelay,
+            execute: workItem)
+    }
+
+    func notifyAccessibilityProjectionIfNeeded(_ change: ScreenChangeInfo) {
+        guard change.generation != lastAccessibilityNotifiedGeneration else { return }
+        let oldProjection = lastAccessibilityNotifiedProjection
+        lastAccessibilityNotifiedGeneration = change.generation
+        lastAccessibilityProjectionGeneration = change.generation
+
+        invalidateAccessibilityTextProjection()
+        let newProjection = cachedAccessibilityTextProjection.get()
+        lastAccessibilityNotifiedProjection = newProjection
+
+        var postedValueChanged = false
+        if let oldProjection,
+           let userInfo = accessibilityValueChangedUserInfo(
+                oldProjection: oldProjection,
+                newProjection: newProjection) {
+            NSAccessibility.post(
+                element: self,
+                notification: .valueChanged,
+                userInfo: userInfo)
+            postedValueChanged = true
+        }
+
+        let selectedTextChanged = oldProjection.map {
+            !Self.accessibilityRangeEqual(
+                Self.accessibilityEffectiveSelectedRange(in: $0),
+                Self.accessibilityEffectiveSelectedRange(in: newProjection))
+        } ?? false
+
+        if selectedTextChanged && !postedValueChanged {
+            NSAccessibility.post(
+                element: self,
+                notification: .selectedTextChanged,
+                userInfo: accessibilitySelectedTextChangedUserInfo(
+                    changeType: AccessibilityTextNotification.TextStateChangeType.unknown,
+                    focusChanged: false))
+        }
+    }
+
+    func accessibilityValueChangedUserInfo(
+        oldProjection: AccessibilityTextProjection,
+        newProjection: AccessibilityTextProjection
+    ) -> [NSAccessibility.NotificationUserInfoKey: Any]? {
+        guard let diff = accessibilityTextEditDiff(
+            oldText: oldProjection.text,
+            newText: newProjection.text),
+              diff.hasChange else { return nil }
+
+        var changes: [[NSAccessibility.NotificationUserInfoKey: Any]] = []
+        if !diff.deletedText.isEmpty {
+            changes.append([
+                AccessibilityTextNotification.textEditType: AccessibilityTextNotification.TextEditType.delete,
+                AccessibilityTextNotification.textChangeValueLength: diff.deletedText.utf16.count,
+                AccessibilityTextNotification.textChangeValue: diff.deletedText,
+            ])
+        }
+        if !diff.insertedText.isEmpty {
+            let editType = diff.insertedText.utf16.count > 1
+                ? AccessibilityTextNotification.TextEditType.insert
+                : AccessibilityTextNotification.TextEditType.typing
+            changes.append([
+                AccessibilityTextNotification.textEditType: editType,
+                AccessibilityTextNotification.textChangeValueLength: diff.insertedText.utf16.count,
+                AccessibilityTextNotification.textChangeValue: diff.insertedText,
+            ])
+        }
+
+        return [
+            AccessibilityTextNotification.textStateSync: true,
+            AccessibilityTextNotification.textStateChangeType: AccessibilityTextNotification.TextStateChangeType.edit,
+            AccessibilityTextNotification.textChangeValues: changes,
+            AccessibilityTextNotification.textChangeElement: self,
+        ]
+    }
+
+    func accessibilitySelectedTextChangedUserInfo(
+        changeType: Int,
+        focusChanged: Bool
+    ) -> [NSAccessibility.NotificationUserInfoKey: Any] {
+        return [
+            AccessibilityTextNotification.textStateSync: true,
+            AccessibilityTextNotification.textSelectionDirection: 0,
+            AccessibilityTextNotification.textSelectionGranularity: 0,
+            AccessibilityTextNotification.textSelectionChangedFocus: focusChanged,
+            AccessibilityTextNotification.textStateChangeType: changeType,
+            AccessibilityTextNotification.textChangeElement: self,
+        ]
+    }
+
+    @discardableResult
+    func announceAccessibilityChange(_ change: ScreenChangeInfo) -> Bool {
+        let screenChanged = change.usesAlternateScreen != lastAccessibilityAlternateScreen
+
+        lastAccessibilityAlternateScreen = change.usesAlternateScreen
+
+        if screenChanged {
+            announceAccessibility(
+                change.usesAlternateScreen
+                    ? "Full-screen terminal application"
+                    : "Returned to terminal scrollback",
+                priority: .high)
+            return true
+        }
+
+        return false
+    }
+
+    func announceAccessibility(
+        _ announcement: String,
+        priority: NSAccessibilityPriorityLevel
+    ) {
+        NSAccessibility.post(
+            element: NSApplication.shared,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: announcement,
+                .priority: priority.rawValue,
+            ])
+    }
+}

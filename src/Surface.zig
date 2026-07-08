@@ -3333,6 +3333,55 @@ pub fn textCallback(self: *Surface, text: []const u8) !void {
     try self.completeClipboardPaste(text, true);
 }
 
+/// Sends text input to the terminal without using the keyboard protocol or
+/// bracketed paste framing. This is for platform text insertion APIs such as
+/// NSTextInputClient insertText, where the text has already been composed and
+/// should be delivered as typed input rather than as a paste.
+pub fn inputTextCallback(self: *Surface, text: []const u8) !void {
+    if (text.len == 0) return;
+
+    // Crash metadata in case we crash in here
+    crash.sentry.thread_state = self.crashThreadState();
+    defer crash.sentry.thread_state = null;
+
+    if (self.config.mouse_hide_while_typing and !self.mouse.hidden) {
+        self.hideMouse();
+    }
+
+    var data_duped: ?[]u8 = null;
+    const vecs = input.paste.encode(text, .{ .bracketed = false }) catch |err| switch (err) {
+        error.MutableRequired => vecs: {
+            const buf = try self.alloc.dupe(u8, text);
+            errdefer self.alloc.free(buf);
+            data_duped = buf;
+            break :vecs input.paste.encode(buf, .{ .bracketed = false });
+        },
+    };
+    defer if (data_duped) |v| self.alloc.free(v);
+
+    for (vecs) |vec| if (vec.len > 0) {
+        self.queueIo(try termio.Message.writeReq(
+            self.alloc,
+            vec,
+        ), .unlocked);
+    };
+
+    {
+        self.renderer_state.mutex.lock();
+        defer self.renderer_state.mutex.unlock();
+
+        if (self.config.selection_clear_on_typing) {
+            try self.setSelection(null);
+        }
+
+        if (self.config.scroll_to_bottom.keystroke) {
+            self.scrollToBottom() catch |err| {
+                log.warn("error scrolling to bottom err={}", .{err});
+            };
+        }
+    }
+}
+
 /// Callback for when the surface is fully visible or not, regardless
 /// of focus state. This is used to pause rendering when the surface
 /// is not visible, and also re-render when it becomes visible again.

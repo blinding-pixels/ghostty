@@ -156,4 +156,48 @@ extension Ghostty.SurfaceView {
         }
     }
 
+    enum AccessibilityTextNotification {
+        enum TextStateChangeType {
+            static let unknown = 0
+            static let edit = 1
+            static let selectionMove = 2
+        }
+
+        enum TextEditType {
+            static let delete = 1
+            static let insert = 2
+            static let typing = 3
+        }
+
+        static let textChangeElement = NSAccessibility.NotificationUserInfoKey(
+            rawValue: "AXTextChangeElement")
+        static let textChangeValue = NSAccessibility.NotificationUserInfoKey(
+            rawValue: "AXTextChangeValue")
+        static let textChangeValueLength = NSAccessibility.NotificationUserInfoKey(
+            rawValue: "AXTextChangeValueLength")
+        static let textChangeValues = NSAccessibility.NotificationUserInfoKey(
+            rawValue: "AXTextChangeValues")
+        static let textEditType = NSAccessibility.NotificationUserInfoKey(
+            rawValue: "AXTextEditType")
+        static let textSelectionChangedFocus = NSAccessibility.NotificationUserInfoKey(
+            rawValue: "AXTextSelectionChangedFocus")
+        static let textSelectionDirection = NSAccessibility.NotificationUserInfoKey(
+            rawValue: "AXTextSelectionDirection")
+        static let textSelectionGranularity = NSAccessibility.NotificationUserInfoKey(
+            rawValue: "AXTextSelectionGranularity")
+        static let textStateChangeType = NSAccessibility.NotificationUserInfoKey(
+            rawValue: "AXTextStateChangeType")
+        static let textStateSync = NSAccessibility.NotificationUserInfoKey(
+            rawValue: "AXTextStateSync")
+    }
+
+    struct AccessibilityTextEditDiff {
+        let deletedText: String
+        let insertedText: String
+
+        var hasChange: Bool {
+            !deletedText.isEmpty || !insertedText.isEmpty
+        }
+    }
+
 }

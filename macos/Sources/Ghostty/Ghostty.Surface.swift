@@ -35,16 +35,32 @@ extension Ghostty {
             }
         }
 
-        /// Send text to the terminal as if it was typed. This doesn't send the key events so keyboard
-        /// shortcuts and other encodings do not take effect.
+        /// Send text to the terminal as a paste.
+        ///
+        /// This uses the terminal paste path, including bracketed-paste framing when enabled.
         @MainActor
         func sendText(_ text: String) {
+            if text.isEmpty { return }
             let len = text.utf8CString.count
-            if len == 0 { return }
 
             text.withCString { ptr in
                 // len includes the null terminator so we do len - 1
                 ghostty_surface_text(surface, ptr, UInt(len - 1))
+            }
+        }
+
+        /// Send composed text to the terminal as text input.
+        ///
+        /// This bypasses physical keyboard mapping and key bindings, but does not use
+        /// bracketed-paste framing.
+        @MainActor
+        func sendInputText(_ text: String) {
+            if text.isEmpty { return }
+            let len = text.utf8CString.count
+
+            text.withCString { ptr in
+                // len includes the null terminator so we do len - 1
+                ghostty_surface_input_text(surface, ptr, UInt(len - 1))
             }
         }
 
