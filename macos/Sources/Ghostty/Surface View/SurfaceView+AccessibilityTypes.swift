@@ -200,4 +200,50 @@ extension Ghostty.SurfaceView {
         }
     }
 
+    struct AccessibilityProjectionLineMetrics {
+        let oldVisibleLineCount: Int
+        let newVisibleLineCount: Int
+        let changedVisibleLineCount: Int
+        let insertedLineBreakCount: Int
+        let deletedLineBreakCount: Int
+
+        var classification: String {
+            if changedVisibleLineCount == 0 &&
+                insertedLineBreakCount == 0 &&
+                deletedLineBreakCount == 0 {
+                return "unchanged"
+            }
+
+            if changedVisibleLineCount <= 1 &&
+                insertedLineBreakCount == 0 &&
+                deletedLineBreakCount == 0 {
+                return "singleLine"
+            }
+
+            return "multiLine"
+        }
+    }
+
+    struct AccessibilityCommandStatus {
+        let exitCode: Int?
+        let finishedAt: TimeInterval
+    }
+
+    struct AccessibilityFloodState {
+        let startedAt: TimeInterval
+        var lastChangeAt: TimeInterval
+        var maxDirtyRows: Int
+        var changedLineEstimate: Int
+        var sawMeaningfulOutput: Bool
+        var commandStatus: AccessibilityCommandStatus?
+        var baselineProjection: AccessibilityTextProjection?
+        var latestProjection: AccessibilityTextProjection?
+    }
+
+    struct AccessibilityCommandOutputSummary {
+        let lineCount: Int
+        let lastMeaningfulLine: String?
+        let semanticOutput: Bool
+        let source: String
+    }
 }

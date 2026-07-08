@@ -222,6 +222,7 @@
 				"Ghostty/Surface View/SurfaceView_AppKit.swift",
 				"Ghostty/Surface View/SurfaceView+AccessibilityElement.swift",
 				"Ghostty/Surface View/SurfaceView+AccessibilityNotifications.swift",
+				"Ghostty/Surface View/SurfaceView+AccessibilityOutputSummary.swift",
 				"Ghostty/Surface View/SurfaceView+AccessibilityProjection.swift",
 				"Ghostty/Surface View/SurfaceView+AccessibilityTypes.swift",
 				Helpers/AppInfo.swift,

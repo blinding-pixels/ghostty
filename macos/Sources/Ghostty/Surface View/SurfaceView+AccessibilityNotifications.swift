@@ -8,7 +8,12 @@ extension Ghostty.SurfaceView {
         let enabled = NSWorkspace.shared.isVoiceOverEnabled
         ghostty_surface_set_accessibility_enabled(surface, enabled)
         accessibilityTextUpdateWorkItem?.cancel()
+        accessibilityFloodSettleWorkItem?.cancel()
         lastAccessibilityNotifiedProjection = nil
+        lastAccessibilityScreenChangedTraceTime = nil
+        accessibilityFloodState = nil
+        lastAccessibilityCommandStatus = nil
+        suppressPostFloodInputEdits = false
         invalidateAccessibilityTextProjection()
 
         if enabled {
@@ -23,7 +28,30 @@ extension Ghostty.SurfaceView {
     }
 
     func accessibilityScreenChanged(_ change: Ghostty.Action.ScreenChanged) {
-        scheduleAccessibilityTextUpdate(ScreenChangeInfo(change))
+        let changeInfo = ScreenChangeInfo(change)
+        let now = ProcessInfo.processInfo.systemUptime
+        let sinceLastMsValue = lastAccessibilityScreenChangedTraceTime.map {
+            (now - $0) * 1000
+        }
+        lastAccessibilityScreenChangedTraceTime = now
+        noteAccessibilityFloodSignal(
+            changeInfo,
+            now: now,
+            sinceLastMs: sinceLastMsValue)
+        scheduleAccessibilityTextUpdate(changeInfo)
+    }
+
+    func accessibilityCommandFinished(exitCode: Int?) {
+        let status = AccessibilityCommandStatus(
+            exitCode: exitCode,
+            finishedAt: ProcessInfo.processInfo.systemUptime)
+        lastAccessibilityCommandStatus = status
+
+        if var floodState = accessibilityFloodState {
+            floodState.commandStatus = status
+            accessibilityFloodState = floodState
+            scheduleAccessibilityFloodSummary()
+        }
     }
 
     func scheduleAccessibilityTextUpdate(_ changeInfo: ScreenChangeInfo? = nil) {
@@ -55,6 +83,41 @@ extension Ghostty.SurfaceView {
         invalidateAccessibilityTextProjection()
         let newProjection = cachedAccessibilityTextProjection.get()
         lastAccessibilityNotifiedProjection = newProjection
+        let lineMetrics = oldProjection.map {
+            accessibilityProjectionLineMetrics(
+                oldProjection: $0,
+                newProjection: newProjection)
+        }
+        let textDiff = oldProjection.flatMap {
+            accessibilityTextEditDiff(
+                oldText: $0.text,
+                newText: newProjection.text)
+        }
+
+        if let floodState = accessibilityFloodState {
+            if !floodState.sawMeaningfulOutput &&
+                !Self.isAccessibilityFloodOutput(lineMetrics) {
+                accessibilityFloodState = nil
+                if lineMetrics?.classification == "unchanged" {
+                    return
+                }
+            } else {
+                updateAccessibilityFloodState(
+                    lineMetrics: lineMetrics,
+                    latestProjection: newProjection)
+                return
+            }
+        }
+
+        if suppressPostFloodInputEdits &&
+            Self.isAccessibilityInputOnlyEdit(
+                lineMetrics: lineMetrics,
+                diff: textDiff) {
+            if let textDiff {
+                announceAccessibilityPostFloodInputEdit(textDiff)
+            }
+            return
+        }
 
         var postedValueChanged = false
         if let oldProjection,

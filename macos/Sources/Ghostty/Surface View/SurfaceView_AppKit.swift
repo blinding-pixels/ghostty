@@ -225,9 +225,20 @@ extension Ghostty {
         var lastAccessibilityNotifiedGeneration = -1
         var lastAccessibilityProjectionGeneration = -1
         var lastAccessibilityNotifiedProjection: AccessibilityTextProjection?
+        var lastAccessibilityScreenChangedTraceTime: TimeInterval?
+        var accessibilityFloodState: AccessibilityFloodState?
+        var accessibilityFloodSettleWorkItem: DispatchWorkItem?
+        var lastAccessibilityCommandStatus: AccessibilityCommandStatus?
+        var suppressPostFloodInputEdits = false
         var accessibilityReviewSelectedRange: NSRange?
 
         static let accessibilityTextUpdateDelay: DispatchTimeInterval = .milliseconds(35)
+        static let accessibilityFloodFullRows = 12
+        static let accessibilityFloodFastRows = 6
+        static let accessibilityFloodFastWindowMs: TimeInterval = 75
+        static let accessibilityFloodSettleDelay: DispatchTimeInterval = .milliseconds(250)
+        static let accessibilityCommandStatusTTL: TimeInterval = 3
+        static let accessibilitySummaryLineLimit = 160
 
         // We need to support being a first responder so that we can get input events
         override var acceptsFirstResponder: Bool { return true }
@@ -386,6 +397,7 @@ extension Ghostty {
 
         deinit {
             accessibilityTextUpdateWorkItem?.cancel()
+            accessibilityFloodSettleWorkItem?.cancel()
             accessibilityVoiceOverObservation?.invalidate()
 
             // Remove all of our notificationcenter subscriptions

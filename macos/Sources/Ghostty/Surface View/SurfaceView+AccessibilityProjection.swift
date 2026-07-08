@@ -58,6 +58,46 @@ extension Ghostty.SurfaceView {
 
         return cachedAccessibilityTextProjection.get()
     }
+    func accessibilityProjectionLineMetrics(
+        oldProjection: AccessibilityTextProjection,
+        newProjection: AccessibilityTextProjection
+    ) -> AccessibilityProjectionLineMetrics {
+        let oldLines = oldProjection.visibleText.split(
+            separator: "\n",
+            omittingEmptySubsequences: false)
+        let newLines = newProjection.visibleText.split(
+            separator: "\n",
+            omittingEmptySubsequences: false)
+
+        let comparedLineCount = max(oldLines.count, newLines.count)
+        var changedLineCount = 0
+        for lineIndex in 0..<comparedLineCount {
+            if lineIndex >= oldLines.count ||
+                lineIndex >= newLines.count ||
+                oldLines[lineIndex] != newLines[lineIndex] {
+                changedLineCount += 1
+            }
+        }
+
+        let diff = accessibilityTextEditDiff(
+            oldText: oldProjection.visibleText,
+            newText: newProjection.visibleText)
+
+        return AccessibilityProjectionLineMetrics(
+            oldVisibleLineCount: oldLines.count,
+            newVisibleLineCount: newLines.count,
+            changedVisibleLineCount: changedLineCount,
+            insertedLineBreakCount: Self.accessibilityLineBreakCount(
+                in: diff?.insertedText ?? ""),
+            deletedLineBreakCount: Self.accessibilityLineBreakCount(
+                in: diff?.deletedText ?? ""))
+    }
+
+    static func accessibilityLineBreakCount(in text: String) -> Int {
+        text.reduce(0) { count, character in
+            count + (character == "\n" ? 1 : 0)
+        }
+    }
     static func accessibilityEffectiveSelectedRange(
         in projection: AccessibilityTextProjection
     ) -> NSRange {

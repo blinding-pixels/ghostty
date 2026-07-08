@@ -1453,6 +1453,9 @@ extension Ghostty {
             case GHOSTTY_TARGET_SURFACE:
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
+                surfaceView.accessibilityCommandFinished(
+                    exitCode: v.exit_code >= 0 ? Int(v.exit_code) : nil)
+
                 // Determine if we even care about command finish notifications
                 guard let config = (NSApplication.shared.delegate as? AppDelegate)?.ghostty.config else { return }
                 switch config.notifyOnCommandFinish {

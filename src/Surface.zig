@@ -2077,6 +2077,35 @@ pub fn dumpTextLocked(
     };
 }
 
+/// Read the most recent command output using semantic prompt markers.
+///
+/// This returns null when shell integration hasn't marked command output, when
+/// the active screen has no command output, or when the latest written content
+/// is not selectable output.
+pub fn dumpLatestCommandOutput(
+    self: *Surface,
+    alloc: Allocator,
+) !?Text {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+
+    const screen: *terminal.Screen = self.io.terminal.screens.active;
+    const bottom_right = screen.pages.getBottomRight(.screen) orelse return null;
+    const top_left = screen.pages.getTopLeft(.screen);
+
+    var it = bottom_right.cellIterator(.left_up, top_left);
+    while (it.next()) |pin| {
+        const cell = pin.rowAndCell().cell;
+        if (cell.semantic_content != .output) continue;
+        if (!cell.hasText()) continue;
+
+        const sel = screen.selectOutput(pin) orelse continue;
+        return try self.dumpTextLocked(alloc, sel);
+    }
+
+    return null;
+}
+
 /// Returns true if the terminal has a selection.
 pub fn hasSelection(self: *const Surface) bool {
     self.renderer_state.mutex.lock();

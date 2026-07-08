@@ -1718,6 +1718,29 @@ pub const CAPI = struct {
         ptr.deinit();
     }
 
+    export fn ghostty_surface_accessibility_command_output(
+        surface: *Surface,
+        result: *Text,
+    ) bool {
+        const text = surface.core_surface.dumpLatestCommandOutput(
+            global.alloc,
+        ) catch |err| {
+            log.warn("error reading accessibility command output err={}", .{err});
+            return false;
+        } orelse return false;
+
+        result.* = .{
+            .tl_px_x = -1,
+            .tl_px_y = -1,
+            .offset_start = 0,
+            .offset_len = 0,
+            .text = text.text.ptr,
+            .text_len = text.text.len,
+        };
+
+        return true;
+    }
+
     export fn ghostty_surface_accessibility_context_new(surface: *Surface) ?*anyopaque {
         const context = surface.core_surface.createAccessibilityContext(
             global.alloc,
