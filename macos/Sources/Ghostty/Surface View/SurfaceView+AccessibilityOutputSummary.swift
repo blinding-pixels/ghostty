@@ -227,6 +227,8 @@ extension Ghostty.SurfaceView {
                 commandStatus: recentCommandStatus,
                 baselineProjection: lastAccessibilityNotifiedProjection,
                 latestProjection: nil)
+            traceAccessibilityCue(
+                "floodCandidate generation=\(change.generation) dirtyRows=\(change.dirtyRowCount) sinceLastMs=\(sinceLastMs.map { String(format: "%.1f", $0) } ?? "nil")")
         } else if var state = accessibilityFloodState {
             state.lastChangeAt = now
             state.maxDirtyRows = max(state.maxDirtyRows, change.dirtyRowCount)
@@ -332,6 +334,8 @@ extension Ghostty.SurfaceView {
 
         announceAccessibility(message, priority: priority)
         suppressPostFloodInputEdits = true
+        traceAccessibilityCue(
+            "floodSummary source=\(summary.source) semanticOutput=\(summary.semanticOutput) lineCount=\(summary.lineCount) exitCode=\(status?.exitCode.map(String.init) ?? "nil") suppressInputEdits=true message=\(Self.traceString(message))")
     }
 
     func accessibilityCommandStatus(

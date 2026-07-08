@@ -117,6 +117,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				App/macOS/AppDelegate.swift,
+				"App/macOS/AppDelegate+AccessibilityInputTrace.swift",
 				"App/macOS/AppDelegate+Ghostty.swift",
 				App/macOS/main.swift,
 				App/macOS/MainMenu.xib,
@@ -224,6 +225,7 @@
 				"Ghostty/Surface View/SurfaceView+AccessibilityNotifications.swift",
 				"Ghostty/Surface View/SurfaceView+AccessibilityOutputSummary.swift",
 				"Ghostty/Surface View/SurfaceView+AccessibilityProjection.swift",
+				"Ghostty/Surface View/SurfaceView+AccessibilityTrace.swift",
 				"Ghostty/Surface View/SurfaceView+AccessibilityTypes.swift",
 				Helpers/AppInfo.swift,
 				Helpers/CodableBridge.swift,

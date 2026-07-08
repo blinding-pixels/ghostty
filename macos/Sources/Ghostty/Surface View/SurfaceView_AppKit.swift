@@ -1088,6 +1088,7 @@ extension Ghostty {
         }
 
         override func keyDown(with event: NSEvent) {
+            traceInputEvent("keyDown.begin", event: event)
 
             guard let surface = self.surface else {
                 self.interpretKeyEvents([event])
@@ -1167,10 +1168,14 @@ extension Ghostty {
             self.lastPerformKeyEvent = nil
 
             self.interpretKeyEvents([translationEvent])
+            traceInput(
+                "keyDown.afterInterpret accumulator=\((keyTextAccumulator ?? []).map(Self.traceString).joined(separator: ",")) marked=\(markedText.string.isEmpty ? "false" : "true")")
 
             // If our keyboard changed from this we just assume an input method
             // grabbed it and do nothing.
             if !markedTextBefore && keyboardIdBefore != KeyboardLayout.id {
+                traceInput(
+                    "keyDown.return keyboardChanged before=\(keyboardIdBefore ?? "nil") after=\(String(describing: KeyboardLayout.id))")
                 return
             }
 
@@ -1213,6 +1218,7 @@ extension Ghostty {
                         composing: false
                     )
                 }
+                traceInput("keyDown.return committedPreedit")
                 return
             }
 
@@ -1245,6 +1251,7 @@ extension Ghostty {
                     event.characters,
                     composing: composing
                 ) {
+                    traceInput("keyDown.return suppressComposingControl")
                     return
                 }
 
@@ -1260,6 +1267,7 @@ extension Ghostty {
         }
 
         override func keyUp(with event: NSEvent) {
+            traceInputEvent("keyUp", event: event)
             _ = keyAction(GHOSTTY_ACTION_RELEASE, event: event)
         }
 
@@ -1293,6 +1301,7 @@ extension Ghostty {
 
         /// Special case handling for some control keys
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            traceInputEvent("performKeyEquivalent.begin", event: event)
 
             // We only care about key down events. It might not even be possible
             // to receive any other event type here.
@@ -1305,6 +1314,7 @@ extension Ghostty {
             // because there are other event listeners for that (i.e. AppDelegate's
             // local event handler).
             if !focused {
+                traceInput("performKeyEquivalent.return unfocused")
                 return false
             }
 
@@ -1319,6 +1329,7 @@ extension Ghostty {
 
             // If this is a binding then we want to perform it.
             if let bindingFlags {
+                traceInput("performKeyEquivalent.binding flags=\(bindingFlags.rawValue)")
                 // Attempt to trigger a menu item for this key binding. We only do this if:
                 //   - We're not in a key sequence or table (those are separate bindings)
                 //   - The binding is NOT `all` (menu uses FirstResponder chain)
@@ -1331,11 +1342,13 @@ extension Ghostty {
                    bindingFlags.contains(.consumed) {
                     if let appDelegate = NSApp.delegate as? AppDelegate,
                         appDelegate.performGhosttyBindingMenuKeyEquivalent(with: event) {
+                        traceInput("performKeyEquivalent.return menuBinding")
                         return true
                     }
                 }
 
                 self.keyDown(with: event)
+                traceInput("performKeyEquivalent.return bindingKeyDown")
                 return true
             }
 
@@ -1345,6 +1358,7 @@ extension Ghostty {
                 // Pass C-<return> through verbatim
                 // (prevent the default context menu equivalent)
                 if !event.modifierFlags.contains(.control) {
+                    traceInput("performKeyEquivalent.return returnPassthrough")
                     return false
                 }
 
@@ -1355,6 +1369,7 @@ extension Ghostty {
                 // sound and we don't like the beep sound.
                 if !event.modifierFlags.contains(.control) ||
                     !event.modifierFlags.isDisjoint(with: [.shift, .command, .option]) {
+                    traceInput("performKeyEquivalent.return slashPassthrough")
                     return false
                 }
 
@@ -1370,6 +1385,7 @@ extension Ghostty {
                 // synthetic escape and ignoring it? I feel like Cmd+period could map to a
                 // escape binding by accident, but it hasn't happened yet...
                 if event.timestamp == 0 {
+                    traceInput("performKeyEquivalent.return syntheticTimestamp")
                     return false
                 }
 
@@ -1382,6 +1398,7 @@ extension Ghostty {
                     !event.modifierFlags.contains(.control) {
                     // Reset since we got a non-command event.
                     lastPerformKeyEvent = nil
+                    traceInput("performKeyEquivalent.return plainPassthrough")
                     return false
                 }
 
@@ -1396,6 +1413,7 @@ extension Ghostty {
                 }
 
                 lastPerformKeyEvent = event.timestamp
+                traceInput("performKeyEquivalent.return deferCommand")
                 return false
             }
 
@@ -1413,6 +1431,7 @@ extension Ghostty {
             )
 
             self.keyDown(with: finalEvent!)
+            traceInputEvent("performKeyEquivalent.return finalKeyDown", event: finalEvent!)
             return true
         }
 
@@ -1489,6 +1508,8 @@ extension Ghostty {
                 handled = ghostty_surface_key(surface, key_ev)
             }
 
+            traceInput(
+                "keyAction action=\(Self.traceAction(action)) keyCode=\(event.keyCode) text=\(Self.traceString(text)) chars=\(Self.traceEventCharacters(event)) ghosttyChars=\(Self.traceEventGhosttyCharacters(event)) mods=\(key_ev.mods.rawValue) consumed=\(key_ev.consumed_mods.rawValue) unshifted=\(key_ev.unshifted_codepoint) composing=\(composing) handled=\(handled)")
             return handled
         }
 
@@ -2057,6 +2078,8 @@ extension Ghostty.SurfaceView: NSTextInputClient {
         default:
             return
         }
+        traceInput(
+            "insertText chars=\(Self.traceString(chars)) replacementRange={\(replacementRange.location),\(replacementRange.length)} accumulating=\(keyTextAccumulator != nil)")
 
         // If insertText is called, our preedit must be over.
         unmarkText()
@@ -2076,6 +2099,7 @@ extension Ghostty.SurfaceView: NSTextInputClient {
     /// 1. Prevents an audible NSBeep for unimplemented actions.
     /// 2. Allows us to properly encode super+key input events that we don't handle
     override func doCommand(by selector: Selector) {
+        traceInput("doCommand selector=\(NSStringFromSelector(selector))")
 
         // If we are being processed by performKeyEquivalent with a command binding,
         // we send it back through the event system so it can be encoded.

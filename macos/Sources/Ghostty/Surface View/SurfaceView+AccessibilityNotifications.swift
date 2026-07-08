@@ -33,11 +33,16 @@ extension Ghostty.SurfaceView {
         let sinceLastMsValue = lastAccessibilityScreenChangedTraceTime.map {
             (now - $0) * 1000
         }
+        let sinceLastMs = sinceLastMsValue.map {
+            String(format: "%.1f", $0)
+        } ?? "nil"
         lastAccessibilityScreenChangedTraceTime = now
         noteAccessibilityFloodSignal(
             changeInfo,
             now: now,
             sinceLastMs: sinceLastMsValue)
+        traceAccessibilityCue(
+            "screenChanged generation=\(changeInfo.generation) dirtyRows=\(changeInfo.dirtyRowCount) dirtyRange=\(Self.traceRange(changeInfo.dirtyRowRange)) sinceLastMs=\(sinceLastMs) cursor=\(changeInfo.cursorRow),\(changeInfo.cursorColumn) alternate=\(changeInfo.usesAlternateScreen)")
         scheduleAccessibilityTextUpdate(changeInfo)
     }
 
@@ -52,8 +57,28 @@ extension Ghostty.SurfaceView {
             accessibilityFloodState = floodState
             scheduleAccessibilityFloodSummary()
         }
+
+        traceAccessibilityCue(
+            "commandFinished exitCode=\(exitCode.map(String.init) ?? "nil")")
     }
 
+    static func traceRange(_ range: ClosedRange<Int>?) -> String {
+        guard let range else { return "nil" }
+        return "\(range.lowerBound)...\(range.upperBound)"
+    }
+
+    static func traceLineMetrics(_ metrics: AccessibilityProjectionLineMetrics?) -> String {
+        guard let metrics else { return "nil" }
+
+        return [
+            "class=\(metrics.classification)",
+            "oldLines=\(metrics.oldVisibleLineCount)",
+            "newLines=\(metrics.newVisibleLineCount)",
+            "changedLines=\(metrics.changedVisibleLineCount)",
+            "insertedLineBreaks=\(metrics.insertedLineBreakCount)",
+            "deletedLineBreaks=\(metrics.deletedLineBreakCount)",
+        ].joined(separator: ",")
+    }
     func scheduleAccessibilityTextUpdate(_ changeInfo: ScreenChangeInfo? = nil) {
         guard NSWorkspace.shared.isVoiceOverEnabled else { return }
         guard window?.firstResponder === self else { return }
@@ -64,6 +89,7 @@ extension Ghostty.SurfaceView {
 
             let resolvedChangeInfo = changeInfo ?? self.readScreenChangeInfo()
             self.accessibilityTextUpdateWorkItem = nil
+            self.traceAccessibilityCue("flushFast generation=\(resolvedChangeInfo.generation)")
             _ = self.announceAccessibilityChange(resolvedChangeInfo)
             self.notifyAccessibilityProjectionIfNeeded(resolvedChangeInfo)
         }
@@ -99,12 +125,16 @@ extension Ghostty.SurfaceView {
                 !Self.isAccessibilityFloodOutput(lineMetrics) {
                 accessibilityFloodState = nil
                 if lineMetrics?.classification == "unchanged" {
+                    traceAccessibilityCue(
+                        "discardedFloodCandidate requestedGeneration=\(change.generation) notifiedGeneration=\(newProjection.changeInfo.generation) lineDelta=\(Self.traceLineMetrics(lineMetrics))")
                     return
                 }
             } else {
                 updateAccessibilityFloodState(
                     lineMetrics: lineMetrics,
                     latestProjection: newProjection)
+                traceAccessibilityCue(
+                    "suppressedFloodNotification requestedGeneration=\(change.generation) notifiedGeneration=\(newProjection.changeInfo.generation) lineDelta=\(Self.traceLineMetrics(lineMetrics))")
                 return
             }
         }
@@ -116,6 +146,8 @@ extension Ghostty.SurfaceView {
             if let textDiff {
                 announceAccessibilityPostFloodInputEdit(textDiff)
             }
+            traceAccessibilityCue(
+                "suppressedPostFloodInputNotification requestedGeneration=\(change.generation) notifiedGeneration=\(newProjection.changeInfo.generation) insertedUTF16=\(textDiff?.insertedText.utf16.count ?? 0) deletedUTF16=\(textDiff?.deletedText.utf16.count ?? 0) lineDelta=\(Self.traceLineMetrics(lineMetrics))")
             return
         }
 
@@ -137,6 +169,7 @@ extension Ghostty.SurfaceView {
                 Self.accessibilityEffectiveSelectedRange(in: newProjection))
         } ?? false
 
+        var postedSelectedTextChanged = false
         if selectedTextChanged && !postedValueChanged {
             NSAccessibility.post(
                 element: self,
@@ -144,7 +177,11 @@ extension Ghostty.SurfaceView {
                 userInfo: accessibilitySelectedTextChangedUserInfo(
                     changeType: AccessibilityTextNotification.TextStateChangeType.unknown,
                     focusChanged: false))
+            postedSelectedTextChanged = true
         }
+
+        traceAccessibilityCue(
+            "postedNotification requestedGeneration=\(change.generation) notifiedGeneration=\(newProjection.changeInfo.generation) valueChanged=\(postedValueChanged) selectedTextChanged=\(postedSelectedTextChanged) lineDelta=\(Self.traceLineMetrics(lineMetrics))")
     }
 
     func accessibilityValueChangedUserInfo(
@@ -196,7 +233,6 @@ extension Ghostty.SurfaceView {
             AccessibilityTextNotification.textChangeElement: self,
         ]
     }
-
     @discardableResult
     func announceAccessibilityChange(_ change: ScreenChangeInfo) -> Bool {
         let screenChanged = change.usesAlternateScreen != lastAccessibilityAlternateScreen

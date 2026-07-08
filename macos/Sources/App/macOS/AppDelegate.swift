@@ -88,6 +88,7 @@ class AppDelegate: NSObject,
     /// This is only true before application has become active.
     private var applicationHasBecomeActive: Bool = false
 
+
     /// This is set in applicationDidFinishLaunching with the system uptime so we can determine the
     /// seconds since the process was launched.
     private var applicationLaunchTime: TimeInterval = 0
@@ -231,8 +232,13 @@ class AppDelegate: NSObject,
 
         // Setup a local event monitor for app-level keyboard shortcuts. See
         // localEventHandler for more info why.
+        var localEventMask: NSEvent.EventTypeMask = [.keyDown]
+        if inputTraceEnabled {
+            localEventMask.insert(.keyUp)
+            localEventMask.insert(.flagsChanged)
+        }
         _ = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown],
+            matching: localEventMask,
             handler: localEventHandler)
 
         // Notifications
@@ -362,8 +368,7 @@ class AppDelegate: NSObject,
                 undoManager.disableUndoRegistration()
                 _ = TerminalController.newWindow(ghostty)
                 undoManager.enableUndoRegistration()
-            }
-        }
+            }        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -553,6 +558,8 @@ class AppDelegate: NSObject,
     /// This handles events from the NSEvent.addLocalEventMonitor. We use this so we can get
     /// events without any terminal windows open.
     private func localEventHandler(_ event: NSEvent) -> NSEvent? {
+        traceInputEvent("localEvent", event: event)
+
         return switch event.type {
         case .keyDown:
             localEventKeyDown(event)
@@ -1074,7 +1081,6 @@ class AppDelegate: NSObject,
         }
     }
 }
-
 // MARK: Menu
 
 extension AppDelegate {
