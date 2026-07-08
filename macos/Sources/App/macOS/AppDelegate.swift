@@ -88,6 +88,9 @@ class AppDelegate: NSObject,
     /// This is only true before application has become active.
     private var applicationHasBecomeActive: Bool = false
 
+    #if DEBUG
+    var accessibilitySmokeTestStarted = false
+    #endif
 
     /// This is set in applicationDidFinishLaunching with the system uptime so we can determine the
     /// seconds since the process was launched.
@@ -368,7 +371,12 @@ class AppDelegate: NSObject,
                 undoManager.disableUndoRegistration()
                 _ = TerminalController.newWindow(ghostty)
                 undoManager.enableUndoRegistration()
-            }        }
+            }
+
+            #if DEBUG
+            startAccessibilitySmokeTestIfNeeded()
+            #endif
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
