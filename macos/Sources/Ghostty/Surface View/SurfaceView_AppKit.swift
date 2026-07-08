@@ -128,6 +128,8 @@ extension Ghostty {
         // detected with the set_password_input_cb on the Ghostty state.
         var passwordInput: Bool = false {
             didSet {
+                guard oldValue != passwordInput else { return }
+
                 // We need to update our state within the SecureInput manager.
                 let input = SecureInput.shared
                 let id = ObjectIdentifier(self)
@@ -136,6 +138,8 @@ extension Ghostty {
                 } else {
                     input.removeScoped(id)
                 }
+
+                accessibilityPasswordInputDidChange()
             }
         }
 
@@ -230,6 +234,7 @@ extension Ghostty {
         var accessibilityFloodSettleWorkItem: DispatchWorkItem?
         var lastAccessibilityCommandStatus: AccessibilityCommandStatus?
         var suppressPostFloodInputEdits = false
+        var accessibilitySecureAnnouncementPending = false
         var accessibilityReviewSelectedRange: NSRange?
 
         static let accessibilityTextUpdateDelay: DispatchTimeInterval = .milliseconds(35)
@@ -1169,7 +1174,7 @@ extension Ghostty {
 
             self.interpretKeyEvents([translationEvent])
             traceInput(
-                "keyDown.afterInterpret accumulator=\((keyTextAccumulator ?? []).map(Self.traceString).joined(separator: ",")) marked=\(markedText.string.isEmpty ? "false" : "true")")
+                "keyDown.afterInterpret accumulator=\((keyTextAccumulator ?? []).map(accessibilityTraceInputText).joined(separator: ",")) marked=\(markedText.string.isEmpty ? "false" : "true")")
 
             // If our keyboard changed from this we just assume an input method
             // grabbed it and do nothing.
@@ -1509,7 +1514,7 @@ extension Ghostty {
             }
 
             traceInput(
-                "keyAction action=\(Self.traceAction(action)) keyCode=\(event.keyCode) text=\(Self.traceString(text)) chars=\(Self.traceEventCharacters(event)) ghosttyChars=\(Self.traceEventGhosttyCharacters(event)) mods=\(key_ev.mods.rawValue) consumed=\(key_ev.consumed_mods.rawValue) unshifted=\(key_ev.unshifted_codepoint) composing=\(composing) handled=\(handled)")
+                "keyAction action=\(Self.traceAction(action)) keyCode=\(event.keyCode) text=\(accessibilityTraceInputText(text)) chars=\(accessibilityTraceEventCharacters(event)) ghosttyChars=\(accessibilityTraceEventGhosttyCharacters(event)) mods=\(key_ev.mods.rawValue) consumed=\(key_ev.consumed_mods.rawValue) unshifted=\(key_ev.unshifted_codepoint) composing=\(composing) handled=\(handled)")
             return handled
         }
 
@@ -2079,7 +2084,7 @@ extension Ghostty.SurfaceView: NSTextInputClient {
             return
         }
         traceInput(
-            "insertText chars=\(Self.traceString(chars)) replacementRange={\(replacementRange.location),\(replacementRange.length)} accumulating=\(keyTextAccumulator != nil)")
+            "insertText chars=\(accessibilityTraceInputText(chars)) replacementRange={\(replacementRange.location),\(replacementRange.length)} accumulating=\(keyTextAccumulator != nil)")
 
         // If insertText is called, our preedit must be over.
         unmarkText()

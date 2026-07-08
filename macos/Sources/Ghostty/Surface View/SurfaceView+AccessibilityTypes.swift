@@ -3,6 +3,9 @@ import GhosttyKit
 
 extension Ghostty.SurfaceView {
     struct AccessibilityTextProjection {
+        static let secureInputText = "Secure input"
+        static let secureInputAnnouncement = "Secure text field. Text will not be spoken."
+
         static let empty: AccessibilityTextProjection = {
             let text = ""
             return AccessibilityTextProjection(
@@ -12,6 +15,16 @@ extension Ghostty.SurfaceView {
                 selectionRange: nil,
                 changeInfo: .empty)
         }()
+
+        static func secureInput(changeInfo: ScreenChangeInfo) -> AccessibilityTextProjection {
+            let text = secureInputText
+            return AccessibilityTextProjection(
+                text: text,
+                viewportRange: text.startIndex..<text.endIndex,
+                cursorIndex: text.endIndex,
+                selectionRange: nil,
+                changeInfo: changeInfo)
+        }
 
         let text: String
         let viewportRange: Range<String.Index>

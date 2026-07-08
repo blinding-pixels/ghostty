@@ -11,6 +11,10 @@ extension Ghostty.SurfaceView {
     }
 
     func readAccessibilityTextProjection() -> AccessibilityTextProjection {
+        if passwordInput {
+            return .secureInput(changeInfo: readScreenChangeInfo())
+        }
+
         guard let surface else { return .empty }
         guard let context = ghostty_surface_accessibility_context_new(surface) else { return .empty }
         defer { ghostty_surface_accessibility_context_free(context) }
@@ -51,6 +55,11 @@ extension Ghostty.SurfaceView {
         let changeInfo = readScreenChangeInfo()
         _ = announceAccessibilityChange(changeInfo)
 
+        if passwordInput {
+            announceAccessibilitySecureInputIfNeeded(changeInfo, source: "projection")
+            return .secureInput(changeInfo: changeInfo)
+        }
+
         if changeInfo.generation != lastAccessibilityProjectionGeneration {
             lastAccessibilityProjectionGeneration = changeInfo.generation
             invalidateAccessibilityTextProjection()
@@ -58,6 +67,59 @@ extension Ghostty.SurfaceView {
 
         return cachedAccessibilityTextProjection.get()
     }
+
+    func accessibilityPasswordInputDidChange() {
+        accessibilityTextUpdateWorkItem?.cancel()
+        accessibilityTextUpdateWorkItem = nil
+        accessibilityFloodSettleWorkItem?.cancel()
+        accessibilityFloodSettleWorkItem = nil
+        accessibilityFloodState = nil
+        suppressPostFloodInputEdits = false
+        accessibilitySecureAnnouncementPending = passwordInput
+        invalidateAccessibilityTextProjection()
+
+        let projection = readAccessibilityTextProjection()
+        lastAccessibilityProjectionGeneration = projection.changeInfo.generation
+        lastAccessibilityNotifiedGeneration = projection.changeInfo.generation
+        lastAccessibilityNotifiedProjection = projection
+
+        if passwordInput {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.announceAccessibilitySecureInputIfNeeded(
+                    self.readScreenChangeInfo(),
+                    source: "passwordInput")
+            }
+        }
+
+        traceAccessibilityCue(
+            "passwordInputAX state=\(passwordInput) generation=\(projection.changeInfo.generation)")
+    }
+
+    func announceAccessibilitySecureInputIfNeeded(
+        _ changeInfo: ScreenChangeInfo,
+        source: String
+    ) {
+        guard passwordInput else {
+            accessibilitySecureAnnouncementPending = false
+            return
+        }
+        guard accessibilitySecureAnnouncementPending else { return }
+        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        guard window?.firstResponder === self else {
+            traceAccessibilityCue(
+                "secureInputAnnouncementDeferred source=\(source) generation=\(changeInfo.generation)")
+            return
+        }
+
+        accessibilitySecureAnnouncementPending = false
+        announceAccessibility(
+            AccessibilityTextProjection.secureInputAnnouncement,
+            priority: .high)
+        traceAccessibilityCue(
+            "secureInputAnnouncement source=\(source) generation=\(changeInfo.generation)")
+    }
+
     func accessibilityProjectionLineMetrics(
         oldProjection: AccessibilityTextProjection,
         newProjection: AccessibilityTextProjection

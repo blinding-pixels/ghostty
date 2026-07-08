@@ -32,19 +32,43 @@ extension Ghostty.SurfaceView {
             "\(label)",
             "type=\(event.type.rawValue)",
             "keyCode=\(event.keyCode)",
-            "chars=\(Self.traceEventCharacters(event))",
-            "ignoring=\(Self.traceEventCharactersIgnoringModifiers(event))",
-            "ghosttyChars=\(Self.traceEventGhosttyCharacters(event))",
+            "chars=\(accessibilityTraceEventCharacters(event))",
+            "ignoring=\(accessibilityTraceEventCharactersIgnoringModifiers(event))",
+            "ghosttyChars=\(accessibilityTraceEventGhosttyCharacters(event))",
             "mods=\(event.modifierFlags.rawValue)",
             "timestamp=\(event.timestamp)",
         ]
         if let text {
-            parts.append("text=\(Self.traceString(text))")
+            parts.append("text=\(accessibilityTraceInputText(text))")
         }
         if let handled {
             parts.append("handled=\(handled)")
         }
         traceInput(parts.joined(separator: " "))
+    }
+
+    func accessibilityTraceInputText(_ value: String?) -> String {
+        if passwordInput {
+            let length = value?.utf16.count ?? 0
+            return "<secure:\(length)>"
+        }
+
+        return Self.traceString(value)
+    }
+
+    func accessibilityTraceEventCharacters(_ event: NSEvent) -> String {
+        guard event.type == .keyDown || event.type == .keyUp else { return "n/a" }
+        return accessibilityTraceInputText(event.characters)
+    }
+
+    func accessibilityTraceEventCharactersIgnoringModifiers(_ event: NSEvent) -> String {
+        guard event.type == .keyDown || event.type == .keyUp else { return "n/a" }
+        return accessibilityTraceInputText(event.charactersIgnoringModifiers)
+    }
+
+    func accessibilityTraceEventGhosttyCharacters(_ event: NSEvent) -> String {
+        guard event.type == .keyDown || event.type == .keyUp else { return "n/a" }
+        return accessibilityTraceInputText(event.ghosttyCharacters)
     }
 
     static func traceEventCharacters(_ event: NSEvent) -> String {

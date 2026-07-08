@@ -12,18 +12,25 @@ extension AppDelegate {
 
     func traceInputEvent(_ label: String, event: NSEvent) {
         guard inputTraceEnabled else { return }
+        let secureInput = TerminalController.preferredParent?.focusedSurface?.passwordInput == true
         traceInput(
-            "\(label) type=\(event.type.rawValue) keyCode=\(event.keyCode) chars=\(Self.traceEventCharacters(event)) ignoring=\(Self.traceEventCharactersIgnoringModifiers(event)) mods=\(event.modifierFlags.rawValue) timestamp=\(event.timestamp)")
+            "\(label) type=\(event.type.rawValue) keyCode=\(event.keyCode) chars=\(Self.traceEventCharacters(event, secureInput: secureInput)) ignoring=\(Self.traceEventCharactersIgnoringModifiers(event, secureInput: secureInput)) mods=\(event.modifierFlags.rawValue) timestamp=\(event.timestamp)")
     }
 
-    static func traceEventCharacters(_ event: NSEvent) -> String {
+    static func traceEventCharacters(_ event: NSEvent, secureInput: Bool = false) -> String {
         guard event.type == .keyDown || event.type == .keyUp else { return "n/a" }
+        if secureInput { return traceSecureString(event.characters) }
         return traceString(event.characters)
     }
 
-    static func traceEventCharactersIgnoringModifiers(_ event: NSEvent) -> String {
+    static func traceEventCharactersIgnoringModifiers(_ event: NSEvent, secureInput: Bool = false) -> String {
         guard event.type == .keyDown || event.type == .keyUp else { return "n/a" }
+        if secureInput { return traceSecureString(event.charactersIgnoringModifiers) }
         return traceString(event.charactersIgnoringModifiers)
+    }
+
+    static func traceSecureString(_ value: String?) -> String {
+        "<secure:\(value?.utf16.count ?? 0)>"
     }
 
     static func traceString(_ value: String?) -> String {

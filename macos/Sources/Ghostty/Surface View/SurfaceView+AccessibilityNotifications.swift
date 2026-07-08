@@ -14,6 +14,7 @@ extension Ghostty.SurfaceView {
         accessibilityFloodState = nil
         lastAccessibilityCommandStatus = nil
         suppressPostFloodInputEdits = false
+        accessibilitySecureAnnouncementPending = enabled && passwordInput
         invalidateAccessibilityTextProjection()
 
         if enabled {
@@ -101,6 +102,19 @@ extension Ghostty.SurfaceView {
     }
 
     func notifyAccessibilityProjectionIfNeeded(_ change: ScreenChangeInfo) {
+        if passwordInput {
+            announceAccessibilitySecureInputIfNeeded(change, source: "notification")
+            let projection = AccessibilityTextProjection.secureInput(changeInfo: change)
+            lastAccessibilityNotifiedGeneration = change.generation
+            lastAccessibilityProjectionGeneration = change.generation
+            lastAccessibilityNotifiedProjection = projection
+            accessibilityFloodState = nil
+            suppressPostFloodInputEdits = false
+            traceAccessibilityCue(
+                "suppressedPasswordNotification requestedGeneration=\(change.generation)")
+            return
+        }
+
         guard change.generation != lastAccessibilityNotifiedGeneration else { return }
         let oldProjection = lastAccessibilityNotifiedProjection
         lastAccessibilityNotifiedGeneration = change.generation
@@ -188,6 +202,7 @@ extension Ghostty.SurfaceView {
         oldProjection: AccessibilityTextProjection,
         newProjection: AccessibilityTextProjection
     ) -> [NSAccessibility.NotificationUserInfoKey: Any]? {
+        guard !passwordInput else { return nil }
         guard let diff = accessibilityTextEditDiff(
             oldText: oldProjection.text,
             newText: newProjection.text),

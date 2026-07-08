@@ -7,13 +7,21 @@ extension AppDelegate {
     func startAccessibilitySmokeTestIfNeeded() {
         guard !accessibilitySmokeTestStarted else { return }
         let mode = ProcessInfo.processInfo.environment["GHOSTTY_ACCESSIBILITY_SMOKE_TEST"]
-        guard mode == "vim-direct" || mode == "vim-native" || mode == "vim-native-normal" else {
+        guard mode == "vim-direct" ||
+            mode == "vim-native" ||
+            mode == "vim-native-normal" ||
+            mode == "password-exclusion" else {
             return
         }
 
         accessibilitySmokeTestStarted = true
         Task { @MainActor in
-            await runVimAccessibilitySmokeTest(mode: mode ?? "")
+            switch mode {
+            case "password-exclusion":
+                await runPasswordExclusionAccessibilitySmokeTest()
+            default:
+                await runVimAccessibilitySmokeTest(mode: mode ?? "")
+            }
         }
     }
 
@@ -78,6 +86,71 @@ extension AppDelegate {
     }
 
     @MainActor
+    func runPasswordExclusionAccessibilitySmokeTest() async {
+        smokeLog("starting password exclusion accessibility smoke test")
+
+        guard let surfaceView = await waitForFocusedSurface(timeout: 5) else {
+            smokeFail("timed out waiting for focused surface")
+        }
+        guard let surface = surfaceView.surfaceModel else {
+            smokeFail("focused surface has no surface model")
+        }
+
+        let secret = "ghostty-secret-\(UUID().uuidString)"
+        let command = """
+        printf 'Password: '; stty -echo; IFS= read -r secret; status=$?; stty echo; printf '\\npassword-length:%s status:%s\\n' "${#secret}" "$status"\r
+        """
+        surface.sendText(command)
+
+        guard await waitForPasswordInput(surfaceView: surfaceView, expected: true, timeout: 5) else {
+            let value = surfaceView.accessibilityValue() as? String ?? ""
+            smokeLog("screen value while waiting for password mode:\n\(value)")
+            smokeFail("timed out waiting for password input")
+        }
+
+        assertPasswordExcluded(
+            surfaceView: surfaceView,
+            secret: secret,
+            context: "before secret entry")
+
+        surfaceView.insertText(secret, replacementRange: NSRange(location: NSNotFound, length: 0))
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        guard surfaceView.passwordInput else {
+            smokeFail("password input ended before return")
+        }
+
+        assertPasswordExcluded(
+            surfaceView: surfaceView,
+            secret: secret,
+            context: "after secret entry")
+
+        surface.sendInputText("\r")
+
+        guard await waitForPasswordInput(surfaceView: surfaceView, expected: false, timeout: 5) else {
+            smokeFail("timed out waiting for password input to end")
+        }
+
+        guard await waitForAccessibilityValue(
+            surfaceView: surfaceView,
+            matching: { $0.contains("password-length:\(secret.count) status:0") },
+            timeout: 5
+        ) else {
+            let value = surfaceView.accessibilityValue() as? String ?? ""
+            smokeLog("screen value after password prompt:\n\(value)")
+            smokeFail("timed out waiting for password command result")
+        }
+
+        assertPasswordExcluded(
+            surfaceView: surfaceView,
+            secret: secret,
+            context: "after password input")
+
+        smokePass("password excluded from accessibility projection")
+        exit(0)
+    }
+
+    @MainActor
     func sendVimSmokeCommandKey(
         _ key: Ghostty.Input.Key,
         surface: Ghostty.Surface
@@ -115,6 +188,58 @@ extension AppDelegate {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         return nil
+    }
+
+    @MainActor
+    func waitForPasswordInput(
+        surfaceView: Ghostty.SurfaceView,
+        expected: Bool,
+        timeout seconds: TimeInterval
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if surfaceView.passwordInput == expected {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+
+    @MainActor
+    func waitForAccessibilityValue(
+        surfaceView: Ghostty.SurfaceView,
+        matching predicate: (String) -> Bool,
+        timeout seconds: TimeInterval
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            let value = surfaceView.accessibilityValue() as? String ?? ""
+            if predicate(value) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
+    }
+
+    @MainActor
+    func assertPasswordExcluded(
+        surfaceView: Ghostty.SurfaceView,
+        secret: String,
+        context: String
+    ) {
+        let value = surfaceView.accessibilityValue() as? String ?? ""
+        if value.contains(secret) {
+            smokeLog("leaking accessibility value at \(context):\n\(value)")
+            smokeFail("secret was present in accessibility value at \(context)")
+        }
+
+        if surfaceView.passwordInput &&
+            value != Ghostty.SurfaceView.AccessibilityTextProjection.secureInputText {
+            smokeLog("unexpected secure accessibility value at \(context):\n\(value)")
+            smokeFail("secure input did not use password exclusion placeholder at \(context)")
+        }
     }
 
     func processCommand(pid: Int) -> String? {
