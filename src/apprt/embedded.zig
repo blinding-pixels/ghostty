@@ -1305,6 +1305,36 @@ pub const CAPI = struct {
         }
     };
 
+    // ghostty_accessibility_text_s
+    const AccessibilityText = extern struct {
+        text: ?[*:0]const u8,
+        text_len: usize,
+        viewport_start: usize,
+        viewport_end: usize,
+        cursor_offset: usize,
+        selection_start: usize,
+        selection_end: usize,
+        selection_present: u8,
+        cursor_row: usize,
+        cursor_col: usize,
+        dirty_start_row: usize,
+        dirty_end_row: usize,
+        dirty_count: usize,
+        change_generation: usize,
+        alternate_screen: u8,
+    };
+
+    // ghostty_accessibility_change_s
+    const AccessibilityChange = extern struct {
+        cursor_row: usize,
+        cursor_col: usize,
+        dirty_start_row: usize,
+        dirty_end_row: usize,
+        dirty_count: usize,
+        change_generation: usize,
+        alternate_screen: u8,
+    };
+
     // ghostty_point_s
     const Point = extern struct {
         tag: Tag,
@@ -1679,6 +1709,75 @@ pub const CAPI = struct {
 
     export fn ghostty_surface_free_text(_: *Surface, ptr: *Text) void {
         ptr.deinit();
+    }
+
+    export fn ghostty_surface_accessibility_context_new(surface: *Surface) ?*anyopaque {
+        const context = surface.core_surface.createAccessibilityContext(
+            global.alloc,
+        ) catch |err| {
+            log.warn("error creating accessibility context err={}", .{err});
+            return null;
+        };
+
+        return @ptrCast(context);
+    }
+
+    export fn ghostty_surface_accessibility_context_free(context_raw: ?*anyopaque) void {
+        const raw = context_raw orelse return;
+        const context: *CoreSurface.AccessibilityContext = @ptrCast(@alignCast(raw));
+        context.deinit();
+    }
+
+    export fn ghostty_accessibility_context_text(
+        context_raw: ?*anyopaque,
+        result: *AccessibilityText,
+    ) bool {
+        const raw = context_raw orelse return false;
+        const context: *CoreSurface.AccessibilityContext = @ptrCast(@alignCast(raw));
+
+        result.* = .{
+            .text = context.text.ptr,
+            .text_len = context.text.len,
+            .viewport_start = context.viewport_start,
+            .viewport_end = context.viewport_end,
+            .cursor_offset = context.cursor_offset,
+            .selection_start = context.selection_start,
+            .selection_end = context.selection_end,
+            .selection_present = @intFromBool(context.selection_present),
+            .cursor_row = context.cursor_row,
+            .cursor_col = context.cursor_col,
+            .dirty_start_row = context.dirty_start_row,
+            .dirty_end_row = context.dirty_end_row,
+            .dirty_count = context.dirty_count,
+            .change_generation = context.change_generation,
+            .alternate_screen = @intFromBool(context.alternate_screen),
+        };
+        return true;
+    }
+
+    export fn ghostty_surface_accessibility_change(
+        surface: *Surface,
+        result: *AccessibilityChange,
+    ) bool {
+        const change = surface.core_surface.accessibilityChange();
+
+        result.* = .{
+            .cursor_row = change.cursor_row,
+            .cursor_col = change.cursor_col,
+            .dirty_start_row = change.dirty_start_row,
+            .dirty_end_row = change.dirty_end_row,
+            .dirty_count = change.dirty_count,
+            .change_generation = change.generation,
+            .alternate_screen = @intFromBool(change.alternate_screen),
+        };
+        return true;
+    }
+
+    export fn ghostty_surface_set_accessibility_enabled(
+        surface: *Surface,
+        enabled: bool,
+    ) void {
+        surface.core_surface.setAccessibilityEnabled(enabled);
     }
 
     /// Tell the surface that it needs to schedule a render

@@ -1,0 +1,159 @@
+import AppKit
+import GhosttyKit
+
+extension Ghostty.SurfaceView {
+    struct AccessibilityTextProjection {
+        static let empty: AccessibilityTextProjection = {
+            let text = ""
+            return AccessibilityTextProjection(
+                text: text,
+                viewportRange: text.startIndex..<text.endIndex,
+                cursorIndex: text.endIndex,
+                selectionRange: nil,
+                changeInfo: .empty)
+        }()
+
+        let text: String
+        let viewportRange: Range<String.Index>
+        let cursorIndex: String.Index
+        let selectionRange: NSRange?
+        let changeInfo: ScreenChangeInfo
+
+        var visibleText: String {
+            String(text[viewportRange])
+        }
+
+        var utf16Length: Int {
+            text.utf16.count
+        }
+
+        var cursorRange: NSRange {
+            NSRange(cursorIndex..<cursorIndex, in: text)
+        }
+
+        init(
+            text: String,
+            viewportRange: Range<String.Index>,
+            cursorIndex: String.Index,
+            selectionRange: NSRange?,
+            changeInfo: ScreenChangeInfo
+        ) {
+            self.text = text
+            self.viewportRange = viewportRange
+            self.cursorIndex = cursorIndex
+            self.selectionRange = selectionRange
+            self.changeInfo = changeInfo
+        }
+
+        init(
+            text: String,
+            viewportStart: Int,
+            viewportEnd: Int,
+            cursorOffset: Int,
+            selectionStart: Int,
+            selectionEnd: Int,
+            selectionPresent: Bool,
+            changeInfo: ScreenChangeInfo
+        ) {
+            let utf8 = text.utf8
+            let startByte = min(max(viewportStart, 0), utf8.count)
+            let endByte = min(max(viewportEnd, startByte), utf8.count)
+            let cursorByte = min(max(cursorOffset, 0), utf8.count)
+            let selectionStartByte = min(max(selectionStart, 0), utf8.count)
+            let selectionEndByte = min(max(selectionEnd, selectionStartByte), utf8.count)
+            let startUTF8 = utf8.index(utf8.startIndex, offsetBy: startByte)
+            let endUTF8 = utf8.index(utf8.startIndex, offsetBy: endByte)
+            let cursorUTF8 = utf8.index(utf8.startIndex, offsetBy: cursorByte)
+            let selectionStartUTF8 = utf8.index(utf8.startIndex, offsetBy: selectionStartByte)
+            let selectionEndUTF8 = utf8.index(utf8.startIndex, offsetBy: selectionEndByte)
+
+            self.text = text
+            if let start = String.Index(startUTF8, within: text),
+               let end = String.Index(endUTF8, within: text) {
+                self.viewportRange = start..<end
+            } else {
+                self.viewportRange = text.startIndex..<text.endIndex
+            }
+            self.cursorIndex = String.Index(cursorUTF8, within: text) ?? text.endIndex
+            if selectionPresent,
+               let start = String.Index(selectionStartUTF8, within: text),
+               let end = String.Index(selectionEndUTF8, within: text) {
+                self.selectionRange = NSRange(start..<end, in: text)
+            } else {
+                self.selectionRange = nil
+            }
+            self.changeInfo = changeInfo
+        }
+    }
+
+    struct ScreenChangeInfo {
+        static let empty = ScreenChangeInfo()
+
+        let generation: Int
+        let cursorRow: Int
+        let cursorColumn: Int
+        let dirtyRowRange: ClosedRange<Int>?
+        let dirtyRowCount: Int
+        let usesAlternateScreen: Bool
+
+        init() {
+            self.generation = 0
+            self.cursorRow = 0
+            self.cursorColumn = 0
+            self.dirtyRowRange = nil
+            self.dirtyRowCount = 0
+            self.usesAlternateScreen = false
+        }
+
+        init(_ text: ghostty_accessibility_text_s) {
+            let dirtyCount = Int(text.dirty_count)
+            let dirtyStart = Int(text.dirty_start_row)
+            let dirtyEnd = Int(text.dirty_end_row)
+
+            self.generation = max(Int(text.change_generation), 0)
+            self.cursorRow = max(Int(text.cursor_row), 0)
+            self.cursorColumn = max(Int(text.cursor_col), 0)
+            self.dirtyRowCount = max(dirtyCount, 0)
+            self.usesAlternateScreen = text.alternate_screen != 0
+
+            if dirtyCount > 0 {
+                self.dirtyRowRange = max(dirtyStart, 0)...max(dirtyStart, dirtyEnd)
+            } else {
+                self.dirtyRowRange = nil
+            }
+        }
+
+        init(_ change: ghostty_accessibility_change_s) {
+            let dirtyCount = Int(change.dirty_count)
+            let dirtyStart = Int(change.dirty_start_row)
+            let dirtyEnd = Int(change.dirty_end_row)
+
+            self.generation = max(Int(change.change_generation), 0)
+            self.cursorRow = max(Int(change.cursor_row), 0)
+            self.cursorColumn = max(Int(change.cursor_col), 0)
+            self.dirtyRowCount = max(dirtyCount, 0)
+            self.usesAlternateScreen = change.alternate_screen != 0
+
+            if dirtyCount > 0 {
+                self.dirtyRowRange = max(dirtyStart, 0)...max(dirtyStart, dirtyEnd)
+            } else {
+                self.dirtyRowRange = nil
+            }
+        }
+
+        init(_ change: Ghostty.Action.ScreenChanged) {
+            self.generation = change.generation
+            self.cursorRow = change.cursorRow
+            self.cursorColumn = change.cursorCol
+            self.dirtyRowCount = change.dirtyCount
+            self.usesAlternateScreen = change.usesAlternateScreen
+
+            if change.dirtyCount > 0 {
+                self.dirtyRowRange = change.dirtyStartRow...max(change.dirtyStartRow, change.dirtyEndRow)
+            } else {
+                self.dirtyRowRange = nil
+            }
+        }
+    }
+
+}

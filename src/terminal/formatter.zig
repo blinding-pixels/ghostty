@@ -124,6 +124,32 @@ pub const PinMap = struct {
     map: *std.ArrayList(Pin),
 };
 
+/// Records byte spans while formatting plain text.
+///
+/// This is intentionally lighter than PinMap for callers that only need a few
+/// offsets into the final string instead of one pin per emitted byte.
+pub const PinSpanObserver = struct {
+    ctx: *anyopaque,
+    record: *const fn (*anyopaque, Pin, usize, usize) void,
+    offset: usize = 0,
+
+    fn observe(self: *PinSpanObserver, pin: Pin, len: usize) void {
+        if (len == 0) return;
+        self.record(self.ctx, pin, self.offset, len);
+        self.offset += len;
+    }
+};
+
+const PointSpanObserver = struct {
+    ctx: *anyopaque,
+    record: *const fn (*anyopaque, Coordinate, usize) void,
+
+    fn observe(self: PointSpanObserver, coord: Coordinate, len: usize) void {
+        if (len == 0) return;
+        self.record(self.ctx, coord, len);
+    }
+};
+
 /// Terminal formatter formats the active terminal screen.
 ///
 /// This will always only emit data related to the currently active screen.
@@ -447,6 +473,10 @@ pub const ScreenFormatter = struct {
     /// Warning: there is a significant performance hit to track this
     pin_map: ?PinMap,
 
+    /// If non-null, records contiguous byte spans for source pins without
+    /// retaining one pin per emitted byte.
+    pin_span_observer: ?*PinSpanObserver,
+
     pub const Content = union(enum) {
         /// Emit no content, only terminal state such as modes, palette, etc.
         /// via extra.
@@ -528,6 +558,7 @@ pub const ScreenFormatter = struct {
             .content = .{ .selection = null },
             .extra = .none,
             .pin_map = null,
+            .pin_span_observer = null,
         };
     }
 
@@ -542,6 +573,7 @@ pub const ScreenFormatter = struct {
                 // Emit our pagelist contents according to our selection.
                 var list_formatter: PageListFormatter = .init(&self.screen.pages, self.opts);
                 list_formatter.pin_map = self.pin_map;
+                list_formatter.pin_span_observer = self.pin_span_observer;
                 if (selection_) |sel| {
                     list_formatter.top_left = sel.topLeft(self.screen);
                     list_formatter.bottom_right = sel.bottomRight(self.screen);
@@ -716,6 +748,10 @@ pub const PageListFormatter = struct {
     /// Warning: there is a significant performance hit to track this
     pin_map: ?PinMap,
 
+    /// If non-null, records contiguous byte spans for source pins without
+    /// retaining one pin per emitted byte.
+    pin_span_observer: ?*PinSpanObserver,
+
     pub fn init(
         list: *const PageList,
         opts: Options,
@@ -727,6 +763,7 @@ pub const PageListFormatter = struct {
             .bottom_right = null,
             .rectangle = false,
             .pin_map = null,
+            .pin_span_observer = null,
         };
     }
 
@@ -770,6 +807,16 @@ pub const PageListFormatter = struct {
                 point_map.clearRetainingCapacity();
                 formatter.point_map = .{ .alloc = m.alloc, .map = &point_map };
             }
+            var span_adapter: PinSpanAdapter = .{
+                .node = chunk.node,
+                .observer = self.pin_span_observer,
+            };
+            if (self.pin_span_observer != null) {
+                formatter.point_span_observer = .{
+                    .ctx = &span_adapter,
+                    .record = PinSpanAdapter.observe,
+                };
+            }
 
             page_state = try formatter.formatWithState(writer);
 
@@ -786,6 +833,21 @@ pub const PageListFormatter = struct {
             }
         }
     }
+
+    const PinSpanAdapter = struct {
+        node: *PageList.List.Node,
+        observer: ?*PinSpanObserver,
+
+        fn observe(ctx: *anyopaque, coord: Coordinate, len: usize) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            const observer = self.observer orelse return;
+            observer.observe(.{
+                .node = self.node,
+                .x = coord.x,
+                .y = @intCast(coord.y),
+            }, len);
+        }
+    };
 };
 
 /// Page formatter.
@@ -836,6 +898,10 @@ pub const PageFormatter = struct {
         map: *std.ArrayList(Coordinate),
     },
 
+    /// If non-null, records contiguous byte spans for source coordinates
+    /// without retaining one coordinate per emitted byte.
+    point_span_observer: ?PointSpanObserver,
+
     /// The previous trailing state from the prior page. If you're iterating
     /// over multiple pages this helps ensure that unwrapping and other
     /// accounting works properly.
@@ -863,6 +929,7 @@ pub const PageFormatter = struct {
             .end_y = null,
             .rectangle = false,
             .point_map = null,
+            .point_span_observer = null,
             .trailing_state = null,
         };
     }
@@ -878,6 +945,21 @@ pub const PageFormatter = struct {
         self: PageFormatter,
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!TrailingState {
+        const SpanRecorder = struct {
+            observer: ?PointSpanObserver,
+            last_coord: ?Coordinate = null,
+
+            fn observe(self_: *@This(), coord: Coordinate, len: usize) void {
+                if (len == 0) return;
+                if (self_.observer) |observer| observer.observe(coord, len);
+                self_.last_coord = coord;
+            }
+        };
+
+        var span_recorder: SpanRecorder = .{
+            .observer = self.point_span_observer,
+        };
+        if (self.point_span_observer != null) assert(self.opts.emit == .plain);
         var blank_rows: usize = 0;
         var blank_cells: usize = 0;
 
@@ -1102,6 +1184,18 @@ pub const PageFormatter = struct {
                         ) catch return error.WriteFailed;
                     }
                 }
+                if (self.point_span_observer != null) {
+                    const start = span_recorder.last_coord orelse Coordinate{ .x = 0, .y = 0 };
+                    span_recorder.observe(start, sequence.len);
+
+                    for (1..blank_rows) |y_offset_usize| {
+                        const y_offset: size.CellCountInt = @intCast(y_offset_usize);
+                        span_recorder.observe(.{
+                            .x = 0,
+                            .y = start.y + y_offset,
+                        }, sequence.len);
+                    }
+                }
 
                 blank_rows = 0;
             }
@@ -1179,6 +1273,24 @@ pub const PageFormatter = struct {
                                 map.alloc,
                                 .{ .x = blank_x, .y = blank_y },
                             ) catch return error.WriteFailed;
+                        }
+                    }
+                    if (self.point_span_observer != null) {
+                        var remaining_blanks = blank_cells;
+                        var blank_x = x;
+                        var blank_y = y;
+                        while (remaining_blanks > 0) : (remaining_blanks -= 1) {
+                            if (blank_x > 0) {
+                                blank_x -= 1;
+                            } else if (blank_y > 0) {
+                                blank_y -= 1;
+                                blank_x = self.page.size.cols - 1;
+                            } else {
+                                blank_x = 0;
+                                blank_y = 0;
+                            }
+
+                            span_recorder.observe(.{ .x = blank_x, .y = blank_y }, 1);
                         }
                     }
 
@@ -1321,6 +1433,11 @@ pub const PageFormatter = struct {
                                 .y = y,
                             }) catch return error.WriteFailed;
                         }
+                        if (self.point_span_observer != null) {
+                            var discarding: std.Io.Writer.Discarding = .init(&.{});
+                            try self.writeCell(tag, &discarding.writer, cell);
+                            span_recorder.observe(.{ .x = x, .y = y }, @intCast(discarding.fullCount()));
+                        }
                     },
 
                     // Cells with only background color (no text). Emit a space
@@ -1331,6 +1448,7 @@ pub const PageFormatter = struct {
                             map.alloc,
                             .{ .x = x, .y = y },
                         ) catch return error.WriteFailed;
+                        span_recorder.observe(.{ .x = x, .y = y }, 1);
                     },
                 }
             }

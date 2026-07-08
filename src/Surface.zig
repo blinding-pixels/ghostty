@@ -1110,6 +1110,16 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
             };
         },
 
+        .screen_changed => |change| {
+            _ = self.rt_app.performAction(
+                .{ .surface = self },
+                .screen_changed,
+                change,
+            ) catch |err| {
+                log.warn("apprt failed to notify screen change={}", .{err});
+            };
+        },
+
         .progress_report => |v| {
             _ = self.rt_app.performAction(
                 .{ .surface = self },
@@ -1895,6 +1905,42 @@ pub const Text = struct {
         alloc.free(self.text);
     }
 };
+
+pub const AccessibilityContext = terminal.Screen.AccessibilityContext;
+pub const AccessibilityChange = terminal.RenderState.AccessibilityChange;
+
+pub fn setAccessibilityEnabled(self: *Surface, enabled: bool) void {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+
+    self.renderer_state.accessibility_enabled = enabled;
+}
+
+pub fn accessibilityChange(self: *Surface) AccessibilityChange {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+
+    var change = self.renderer_state.accessibility_change;
+    change.alternate_screen = self.io.terminal.screens.active_key == .alternate;
+    return change;
+}
+
+pub fn createAccessibilityContext(
+    self: *Surface,
+    alloc: Allocator,
+) !*AccessibilityContext {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+
+    const context = try self.io.terminal.screens.active.createAccessibilityContext(alloc);
+    const accessibility_change = self.renderer_state.accessibility_change;
+    context.dirty_start_row = accessibility_change.dirty_start_row;
+    context.dirty_end_row = accessibility_change.dirty_end_row;
+    context.dirty_count = accessibility_change.dirty_count;
+    context.change_generation = accessibility_change.generation;
+    context.alternate_screen = self.io.terminal.screens.active_key == .alternate;
+    return context;
+}
 
 /// Grab the value of text at the given selection point. Note that the
 /// selection structure is used as a way to determine the area of the

@@ -116,6 +116,26 @@ extension Ghostty.Action {
         }
     }
 
+    struct ScreenChanged {
+        let cursorRow: Int
+        let cursorCol: Int
+        let dirtyStartRow: Int
+        let dirtyEndRow: Int
+        let dirtyCount: Int
+        let generation: Int
+        let usesAlternateScreen: Bool
+
+        init(c: ghostty_action_screen_changed_s) {
+            cursorRow = max(Int(c.cursor_row), 0)
+            cursorCol = max(Int(c.cursor_col), 0)
+            dirtyStartRow = max(Int(c.dirty_start_row), 0)
+            dirtyEndRow = max(Int(c.dirty_end_row), 0)
+            dirtyCount = max(Int(c.dirty_count), 0)
+            generation = max(Int(c.change_generation), 0)
+            usesAlternateScreen = c.alternate_screen != 0
+        }
+    }
+
     struct StartSearch {
         let needle: String?
 

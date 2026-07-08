@@ -238,6 +238,63 @@ pub const RenderState = struct {
         "full",
     });
 
+    pub const AccessibilityChange = struct {
+        generation: usize = 0,
+        cursor_row: usize = 0,
+        cursor_col: usize = 0,
+        dirty_start_row: usize = 0,
+        dirty_end_row: usize = 0,
+        dirty_count: usize = 0,
+        alternate_screen: bool = false,
+
+        pub fn update(
+            self: *AccessibilityChange,
+            render_state: *const RenderState,
+            active_screen: ScreenSet.Key,
+        ) bool {
+            const cursor_row: usize = @intCast(render_state.cursor.active.y);
+            const cursor_col: usize = @intCast(render_state.cursor.active.x);
+            const alternate_screen = active_screen == .alternate;
+            var dirty_start_row: usize = 0;
+            var dirty_end_row: usize = 0;
+            var dirty_count: usize = 0;
+
+            switch (render_state.dirty) {
+                .false => {},
+                .full => {
+                    if (render_state.rows > 0) {
+                        dirty_end_row = render_state.rows - 1;
+                        dirty_count = render_state.rows;
+                    }
+                },
+                .partial => for (render_state.row_data.items(.dirty), 0..) |dirty, row| {
+                    if (!dirty) continue;
+
+                    if (dirty_count == 0) dirty_start_row = row;
+                    dirty_end_row = row;
+                    dirty_count += 1;
+                },
+            }
+
+            if (dirty_count == 0 and
+                self.cursor_row == cursor_row and
+                self.cursor_col == cursor_col and
+                self.alternate_screen == alternate_screen)
+            {
+                return false;
+            }
+
+            self.generation +%= 1;
+            self.cursor_row = cursor_row;
+            self.cursor_col = cursor_col;
+            self.alternate_screen = alternate_screen;
+            self.dirty_start_row = dirty_start_row;
+            self.dirty_end_row = dirty_end_row;
+            self.dirty_count = dirty_count;
+            return true;
+        }
+    };
+
     const SelectionCache = struct {
         selection: Selection,
         tl_pin: PageList.Pin,
@@ -1117,10 +1174,17 @@ test "dirty state" {
 
     var state: RenderState = .empty;
     defer state.deinit(alloc);
+    var change: RenderState.AccessibilityChange = .{};
 
     // First update should trigger redraw due to resize
     try state.update(alloc, &t);
     try testing.expectEqual(.full, state.dirty);
+    try testing.expect(change.update(&state, .primary));
+    try testing.expectEqual(@as(usize, 1), change.generation);
+    try testing.expectEqual(@as(usize, 0), change.dirty_start_row);
+    try testing.expectEqual(@as(usize, 4), change.dirty_end_row);
+    try testing.expectEqual(@as(usize, 5), change.dirty_count);
+    try testing.expect(!change.alternate_screen);
 
     // Reset dirty flag and dirty rows
     state.dirty = .false;
@@ -1133,16 +1197,34 @@ test "dirty state" {
     // Second update with no changes - no dirty rows
     try state.update(alloc, &t);
     try testing.expectEqual(.false, state.dirty);
+    try testing.expect(!change.update(&state, .primary));
+    try testing.expectEqual(@as(usize, 1), change.generation);
     {
         const row_data = state.row_data.slice();
         const dirty = row_data.items(.dirty);
         for (dirty) |d| try testing.expect(!d);
     }
 
+    // Active screen changes are accessibility changes even without dirty rows.
+    try testing.expect(change.update(&state, .alternate));
+    try testing.expectEqual(@as(usize, 2), change.generation);
+    try testing.expectEqual(@as(usize, 0), change.dirty_count);
+    try testing.expect(change.alternate_screen);
+    try testing.expect(!change.update(&state, .alternate));
+    try testing.expectEqual(@as(usize, 2), change.generation);
+
     // Write to first line
     s.nextSlice("A");
     try state.update(alloc, &t);
     try testing.expectEqual(.partial, state.dirty);
+    try testing.expect(change.update(&state, .alternate));
+    try testing.expectEqual(@as(usize, 3), change.generation);
+    try testing.expectEqual(@as(usize, 0), change.cursor_row);
+    try testing.expectEqual(@as(usize, 1), change.cursor_col);
+    try testing.expectEqual(@as(usize, 0), change.dirty_start_row);
+    try testing.expectEqual(@as(usize, 0), change.dirty_end_row);
+    try testing.expectEqual(@as(usize, 1), change.dirty_count);
+    try testing.expect(change.alternate_screen);
     {
         const row_data = state.row_data.slice();
         const dirty = row_data.items(.dirty);

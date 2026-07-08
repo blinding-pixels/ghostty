@@ -414,6 +414,36 @@ typedef struct {
   uintptr_t text_len;
 } ghostty_text_s;
 
+typedef void* ghostty_accessibility_context_t;
+
+typedef struct {
+  const char* text;
+  uintptr_t text_len;
+  uintptr_t viewport_start;
+  uintptr_t viewport_end;
+  uintptr_t cursor_offset;
+  uintptr_t selection_start;
+  uintptr_t selection_end;
+  uint8_t selection_present;
+  uintptr_t cursor_row;
+  uintptr_t cursor_col;
+  uintptr_t dirty_start_row;
+  uintptr_t dirty_end_row;
+  uintptr_t dirty_count;
+  uintptr_t change_generation;
+  uint8_t alternate_screen;
+} ghostty_accessibility_text_s;
+
+typedef struct {
+  uintptr_t cursor_row;
+  uintptr_t cursor_col;
+  uintptr_t dirty_start_row;
+  uintptr_t dirty_end_row;
+  uintptr_t dirty_count;
+  uintptr_t change_generation;
+  uint8_t alternate_screen;
+} ghostty_accessibility_change_s;
+
 typedef enum {
   GHOSTTY_POINT_ACTIVE,
   GHOSTTY_POINT_VIEWPORT,
@@ -881,6 +911,17 @@ typedef struct {
   uint64_t len;
 } ghostty_action_scrollbar_s;
 
+// apprt.action.ScreenChanged
+typedef struct {
+  uintptr_t change_generation;
+  uint16_t cursor_row;
+  uint16_t cursor_col;
+  uint16_t dirty_start_row;
+  uint16_t dirty_end_row;
+  uint16_t dirty_count;
+  uint8_t alternate_screen;
+} ghostty_action_screen_changed_s;
+
 // apprt.Action.Key
 typedef enum {
   GHOSTTY_ACTION_QUIT,
@@ -949,6 +990,7 @@ typedef enum {
   GHOSTTY_ACTION_SEARCH_SELECTED,
   GHOSTTY_ACTION_READONLY,
   GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD,
+  GHOSTTY_ACTION_SCREEN_CHANGED,
 } ghostty_action_tag_e;
 
 typedef union {
@@ -990,6 +1032,7 @@ typedef union {
   ghostty_action_search_total_s search_total;
   ghostty_action_search_selected_s search_selected;
   ghostty_action_readonly_e readonly;
+  ghostty_action_screen_changed_s screen_changed;
 } ghostty_action_u;
 
 typedef struct {
@@ -1162,6 +1205,16 @@ GHOSTTY_API bool ghostty_surface_read_text(ghostty_surface_t,
                                               ghostty_selection_s,
                                               ghostty_text_s*);
 GHOSTTY_API void ghostty_surface_free_text(ghostty_surface_t, ghostty_text_s*);
+GHOSTTY_API ghostty_accessibility_context_t
+ghostty_surface_accessibility_context_new(ghostty_surface_t);
+GHOSTTY_API void
+ghostty_surface_accessibility_context_free(ghostty_accessibility_context_t);
+GHOSTTY_API bool ghostty_accessibility_context_text(ghostty_accessibility_context_t,
+                                                       ghostty_accessibility_text_s*);
+GHOSTTY_API bool ghostty_surface_accessibility_change(ghostty_surface_t,
+                                                         ghostty_accessibility_change_s*);
+GHOSTTY_API void ghostty_surface_set_accessibility_enabled(ghostty_surface_t,
+                                                           bool);
 
 #ifdef __APPLE__
 GHOSTTY_API void ghostty_surface_set_display_id(ghostty_surface_t, uint32_t);

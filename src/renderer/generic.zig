@@ -1159,6 +1159,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 preedit: ?renderer.State.Preedit,
                 scrollbar: terminal.Scrollbar,
                 overlay_features: []const Overlay.Feature,
+                accessibility_change: ?apprt.action.ScreenChanged,
             };
 
             // Update all our data as tightly as possible within the mutex.
@@ -1201,6 +1202,15 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
                 // Update our terminal state
                 try self.terminal_state.update(self.alloc, state.terminal);
+                const accessibility_change: ?apprt.action.ScreenChanged = accessibility: {
+                    if (!state.accessibility_enabled) break :accessibility null;
+                    if (!state.accessibility_change.update(
+                        &self.terminal_state,
+                        state.terminal.screens.active_key,
+                    )) break :accessibility null;
+
+                    break :accessibility .init(state.accessibility_change);
+                };
 
                 // If our terminal state is dirty at all we need to redo
                 // the viewport search.
@@ -1276,8 +1286,15 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     .preedit = preedit,
                     .scrollbar = scrollbar,
                     .overlay_features = overlay_features,
+                    .accessibility_change = accessibility_change,
                 };
             };
+
+            if (critical.accessibility_change) |change| {
+                _ = self.surface_mailbox.push(.{
+                    .screen_changed = change,
+                }, .instant);
+            }
 
             // Outside the critical area we can update our links to contain
             // our regex results.

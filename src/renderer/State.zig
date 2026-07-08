@@ -20,6 +20,12 @@ terminal: *terminalpkg.Terminal,
 /// is not active and will be set when it is active.
 inspector: ?*Inspector = null,
 
+/// Last compact terminal change summary captured by the renderer.
+accessibility_change: terminalpkg.RenderState.AccessibilityChange = .{},
+
+/// True when the app has an active accessibility consumer for terminal text.
+accessibility_enabled: bool = false,
+
 /// Dead key state. This will render the current dead key preedit text
 /// over the cursor. This currently only ever renders a single codepoint.
 /// Preedit can in theory be multiple codepoints long but that is left as

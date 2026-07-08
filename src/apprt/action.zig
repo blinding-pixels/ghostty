@@ -347,6 +347,9 @@ pub const Action = union(Key) {
     /// otherwise the terminal-set title.
     copy_title_to_clipboard,
 
+    /// The terminal accessibility projection changed.
+    screen_changed: ScreenChanged,
+
     /// Sync with: ghostty_action_tag_e
     pub const Key = enum(c_int) {
         quit,
@@ -415,6 +418,7 @@ pub const Action = union(Key) {
         search_selected,
         readonly,
         copy_title_to_clipboard,
+        screen_changed,
 
         test "ghostty.h Action.Key" {
             try lib.checkGhosttyHEnum(Key, "GHOSTTY_ACTION_");
@@ -1004,6 +1008,32 @@ pub const SearchSelected = struct {
         return .{
             .selected = if (self.selected) |s| @intCast(s) else -1,
         };
+    }
+};
+
+pub const ScreenChanged = extern struct {
+    change_generation: usize,
+    cursor_row: u16,
+    cursor_col: u16,
+    dirty_start_row: u16,
+    dirty_end_row: u16,
+    dirty_count: u16,
+    alternate_screen: u8,
+
+    pub fn init(change: terminal.RenderState.AccessibilityChange) ScreenChanged {
+        return .{
+            .change_generation = change.generation,
+            .cursor_row = intCastSaturated(u16, change.cursor_row),
+            .cursor_col = intCastSaturated(u16, change.cursor_col),
+            .dirty_start_row = intCastSaturated(u16, change.dirty_start_row),
+            .dirty_end_row = intCastSaturated(u16, change.dirty_end_row),
+            .dirty_count = intCastSaturated(u16, change.dirty_count),
+            .alternate_screen = @intFromBool(change.alternate_screen),
+        };
+    }
+
+    fn intCastSaturated(comptime T: type, value: anytype) T {
+        return std.math.cast(T, value) orelse std.math.maxInt(T);
     }
 };
 

@@ -15,7 +15,9 @@ const Selection = @import("Selection.zig");
 const PageList = @import("PageList.zig");
 const selection_codepoints = @import("selection_codepoints.zig");
 const StringMap = @import("StringMap.zig");
-const ScreenFormatter = @import("formatter.zig").ScreenFormatter;
+const formatterpkg = @import("formatter.zig");
+const ScreenFormatter = formatterpkg.ScreenFormatter;
+const PinSpanObserver = formatterpkg.PinSpanObserver;
 const osc = @import("osc.zig");
 const pagepkg = @import("page.zig");
 const point = @import("point.zig");
@@ -2511,6 +2513,271 @@ pub fn selectionString(
     return text;
 }
 
+pub const AccessibilityContext = struct {
+    alloc: Allocator,
+    text: [:0]const u8,
+    viewport_start: usize,
+    viewport_end: usize,
+    cursor_offset: usize,
+    selection_start: usize,
+    selection_end: usize,
+    selection_present: bool,
+    cursor_row: usize,
+    cursor_col: usize,
+    dirty_start_row: usize,
+    dirty_end_row: usize,
+    dirty_count: usize,
+    change_generation: usize,
+    alternate_screen: bool = false,
+
+    pub fn deinit(self: *AccessibilityContext) void {
+        self.alloc.free(self.text);
+        self.alloc.destroy(self);
+    }
+};
+
+const accessibility_scrollback_window_rows: usize = 500;
+
+pub fn createAccessibilityContext(
+    self: *Screen,
+    alloc: Allocator,
+) Allocator.Error!*AccessibilityContext {
+    const viewport_br = self.pages.getBottomRight(.viewport) orelse {
+        const context = try alloc.create(AccessibilityContext);
+        errdefer alloc.destroy(context);
+
+        const text = try alloc.dupeZ(u8, "");
+        context.* = .{
+            .alloc = alloc,
+            .text = text,
+            .viewport_start = 0,
+            .viewport_end = 0,
+            .cursor_offset = 0,
+            .selection_start = 0,
+            .selection_end = 0,
+            .selection_present = false,
+            .cursor_row = @intCast(self.cursor.y),
+            .cursor_col = @intCast(self.cursor.x),
+            .dirty_start_row = 0,
+            .dirty_end_row = 0,
+            .dirty_count = 0,
+            .change_generation = 0,
+        };
+        return context;
+    };
+    const viewport_tl = self.pages.getTopLeft(.viewport);
+    const window_tl = viewport_tl.up(accessibility_scrollback_window_rows) orelse
+        self.pages.getTopLeft(.screen);
+
+    var text_builder: std.Io.Writer.Allocating = .init(alloc);
+    defer text_builder.deinit();
+
+    var offset_tracker = try AccessibilityOffsetTracker.init(
+        self,
+        alloc,
+        window_tl,
+        viewport_br,
+    );
+    defer offset_tracker.deinit();
+
+    var observer: PinSpanObserver = .{
+        .ctx = &offset_tracker,
+        .record = AccessibilityOffsetTracker.observe,
+    };
+
+    var formatter: ScreenFormatter = .init(
+        self,
+        .{
+            .emit = .plain,
+            .unwrap = true,
+            .trim = false,
+        },
+    );
+    formatter.content = .{
+        .selection = Selection.init(window_tl, viewport_br, false),
+    };
+    formatter.pin_span_observer = &observer;
+    formatter.format(&text_builder.writer) catch return error.OutOfMemory;
+
+    const text = try text_builder.toOwnedSliceSentinel(0);
+    errdefer alloc.free(text);
+    const viewport = offset_tracker.viewportRange(text.len);
+    const cursor_offset = offset_tracker.cursorOffset(text.len);
+    const selection = offset_tracker.selectionRange(text.len);
+
+    const context = try alloc.create(AccessibilityContext);
+    errdefer alloc.destroy(context);
+    context.* = .{
+        .alloc = alloc,
+        .text = text,
+        .viewport_start = viewport.start,
+        .viewport_end = viewport.end,
+        .cursor_offset = cursor_offset,
+        .selection_start = if (selection) |range| range.start else 0,
+        .selection_end = if (selection) |range| range.end else 0,
+        .selection_present = selection != null,
+        .cursor_row = @intCast(self.cursor.y),
+        .cursor_col = @intCast(self.cursor.x),
+        .dirty_start_row = 0,
+        .dirty_end_row = 0,
+        .dirty_count = 0,
+        .change_generation = 0,
+    };
+    return context;
+}
+
+const AccessibilityOffsetTracker = struct {
+    row_offsets: std.AutoHashMap(*PageList.List.Node, usize),
+    viewport_tl: Pin,
+    viewport_br: Pin,
+    viewport_tl_row: usize,
+    viewport_br_row: usize,
+    cursor_pin: Pin,
+    cursor_row: ?usize,
+    selection_start_pin: ?Pin,
+    selection_end_pin: ?Pin,
+    selection_starts_before_window: bool,
+    selection_ends_after_window: bool,
+    viewport_start: ?usize = null,
+    viewport_end: usize = 0,
+    cursor_offset: ?usize = null,
+    selection_start_offset: ?usize = null,
+    selection_end_offset: ?usize = null,
+
+    fn init(
+        screen: *const Screen,
+        alloc: Allocator,
+        window_tl: Pin,
+        window_br: Pin,
+    ) Allocator.Error!AccessibilityOffsetTracker {
+        const viewport_tl = screen.pages.getTopLeft(.viewport);
+        const viewport_br = screen.pages.getBottomRight(.viewport) orelse viewport_tl;
+        const cursor_pin = screen.cursor.page_pin.*;
+        const selection: ?struct {
+            start: Pin,
+            end: Pin,
+            starts_before_window: bool,
+            ends_after_window: bool,
+        } = if (screen.selection) |sel| selection: {
+            const start = sel.topLeft(screen);
+            const end = sel.bottomRight(screen);
+            if (end.before(window_tl) or window_br.before(start)) break :selection null;
+
+            break :selection .{
+                .start = start,
+                .end = end,
+                .starts_before_window = start.before(window_tl),
+                .ends_after_window = window_br.before(end),
+            };
+        } else null;
+
+        var row_offsets = std.AutoHashMap(*PageList.List.Node, usize).init(alloc);
+        errdefer row_offsets.deinit();
+
+        var row_offset: usize = 0;
+        var node: ?*PageList.List.Node = window_tl.node;
+        while (node) |page_node| : (node = page_node.next) {
+            try row_offsets.putNoClobber(page_node, row_offset);
+            row_offset += page_node.data.size.rows;
+            if (page_node == window_br.node) break;
+        }
+
+        return .{
+            .row_offsets = row_offsets,
+            .viewport_tl = viewport_tl,
+            .viewport_br = viewport_br,
+            .viewport_tl_row = row_offsets.get(viewport_tl.node).? + viewport_tl.y,
+            .viewport_br_row = row_offsets.get(viewport_br.node).? + viewport_br.y,
+            .cursor_pin = cursor_pin,
+            .cursor_row = if (row_offsets.get(cursor_pin.node)) |cursor_row_offset|
+                cursor_row_offset + cursor_pin.y
+            else
+                null,
+            .selection_start_pin = if (selection) |sel| sel.start else null,
+            .selection_end_pin = if (selection) |sel| sel.end else null,
+            .selection_starts_before_window = if (selection) |sel| sel.starts_before_window else false,
+            .selection_ends_after_window = if (selection) |sel| sel.ends_after_window else false,
+        };
+    }
+
+    fn deinit(self: *AccessibilityOffsetTracker) void {
+        self.row_offsets.deinit();
+    }
+
+    fn observe(ctx: *anyopaque, pin: Pin, offset: usize, len: usize) void {
+        const self: *AccessibilityOffsetTracker = @ptrCast(@alignCast(ctx));
+        const pin_row_offset = self.row_offsets.get(pin.node) orelse return;
+        const pin_row = pin_row_offset + pin.y;
+
+        if (self.cursor_row) |cursor_row| {
+            if (pin_row < cursor_row) {
+                self.cursor_offset = offset + len;
+            } else if (pin_row == cursor_row) {
+                if (pin.x < self.cursor_pin.x) {
+                    self.cursor_offset = offset + len;
+                } else if (pin.x == self.cursor_pin.x) {
+                    self.cursor_offset = offset;
+                } else if (self.cursor_offset == null) {
+                    self.cursor_offset = offset;
+                }
+            }
+        }
+
+        if (self.selection_start_pin) |start_pin| {
+            if (pin.eql(start_pin)) self.selection_start_offset = offset;
+        }
+        if (self.selection_end_pin) |end_pin| {
+            if (pin.eql(end_pin)) self.selection_end_offset = offset + len;
+        }
+
+        const after_start =
+            pin_row > self.viewport_tl_row or
+            (pin_row == self.viewport_tl_row and pin.x >= self.viewport_tl.x);
+        const before_end =
+            pin_row < self.viewport_br_row or
+            (pin_row == self.viewport_br_row and pin.x <= self.viewport_br.x);
+
+        if (!after_start or !before_end) return;
+
+        if (self.viewport_start == null) self.viewport_start = offset;
+        self.viewport_end = offset + len;
+    }
+
+    fn viewportRange(
+        self: *const AccessibilityOffsetTracker,
+        text_len: usize,
+    ) struct { start: usize, end: usize } {
+        const start = @min(self.viewport_start orelse 0, text_len);
+        const end = @min(@max(start, self.viewport_end), text_len);
+        return .{ .start = start, .end = end };
+    }
+
+    fn cursorOffset(
+        self: *const AccessibilityOffsetTracker,
+        text_len: usize,
+    ) usize {
+        return @min(self.cursor_offset orelse text_len, text_len);
+    }
+
+    fn selectionRange(
+        self: *const AccessibilityOffsetTracker,
+        text_len: usize,
+    ) ?struct { start: usize, end: usize } {
+        if (self.selection_start_pin == null or self.selection_end_pin == null) return null;
+
+        const start = self.selection_start_offset orelse
+            if (self.selection_starts_before_window) 0 else return null;
+        const end = self.selection_end_offset orelse
+            if (self.selection_ends_after_window) text_len else return null;
+
+        if (end < start) return null;
+        return .{
+            .start = @min(start, text_len),
+            .end = @min(end, text_len),
+        };
+    }
+};
+
 pub const SelectLine = struct {
     /// The pin of some part of the line to select.
     pin: Pin,
@@ -3909,6 +4176,123 @@ test "Screen eraseRows history" {
         defer alloc.free(str);
         try testing.expectEqualStrings("2\n3\n4\n5\n6", str);
     }
+}
+
+test "Screen: accessibility context visible text range" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try Screen.init(alloc, .{ .cols = 5, .rows = 3, .max_scrollback = 1024 * 1024 });
+    defer s.deinit();
+
+    try s.testWriteString("1ABCD\n2EFGH\n3IJKL\n4ABCD\n5EFGH");
+
+    const context = try s.createAccessibilityContext(alloc);
+    defer context.deinit();
+
+    const expected = try s.selectionString(alloc, .{
+        .sel = Selection.init(
+            s.pages.getTopLeft(.viewport),
+            s.pages.getBottomRight(.viewport).?,
+            false,
+        ),
+        .trim = false,
+    });
+    defer alloc.free(expected);
+
+    try testing.expectEqualStrings(
+        expected,
+        context.text[context.viewport_start..context.viewport_end],
+    );
+}
+
+test "Screen: accessibility context cursor offset" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try Screen.init(alloc, .{ .cols = 5, .rows = 3, .max_scrollback = 1000 });
+    defer s.deinit();
+
+    try s.testWriteString("abc");
+
+    const context = try s.createAccessibilityContext(alloc);
+    defer context.deinit();
+
+    try testing.expectEqualStrings("abc", context.text);
+    try testing.expectEqual(@as(usize, 3), context.cursor_offset);
+    try testing.expectEqual(@as(usize, 0), context.cursor_row);
+    try testing.expectEqual(@as(usize, 3), context.cursor_col);
+}
+
+test "Screen: accessibility context selection offsets" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try Screen.init(alloc, .{ .cols = 5, .rows = 3, .max_scrollback = 1000 });
+    defer s.deinit();
+
+    try s.testWriteString("abcde\nfghij");
+    try s.select(Selection.init(
+        s.pages.pin(.{ .screen = .{ .x = 1, .y = 0 } }).?,
+        s.pages.pin(.{ .screen = .{ .x = 2, .y = 1 } }).?,
+        false,
+    ));
+
+    const context = try s.createAccessibilityContext(alloc);
+    defer context.deinit();
+
+    const expected = try s.selectionString(alloc, .{
+        .sel = s.selection.?,
+        .trim = false,
+    });
+    defer alloc.free(expected);
+
+    try testing.expect(context.selection_present);
+    try testing.expectEqualStrings(
+        expected,
+        context.text[context.selection_start..context.selection_end],
+    );
+}
+
+test "Screen: accessibility context bounds scrollback window" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var s = try Screen.init(alloc, .{ .cols = 5, .rows = 3, .max_scrollback = 1000 });
+    defer s.deinit();
+
+    for (0..accessibility_scrollback_window_rows + 20) |i| {
+        var buf: [16]u8 = undefined;
+        const line = try std.fmt.bufPrint(&buf, "{d}\n", .{i});
+        try s.testWriteString(line);
+    }
+
+    const context = try s.createAccessibilityContext(alloc);
+    defer context.deinit();
+
+    const viewport_tl = s.pages.getTopLeft(.viewport);
+    const window_tl = viewport_tl.up(accessibility_scrollback_window_rows) orelse
+        s.pages.getTopLeft(.screen);
+    const viewport_br = s.pages.getBottomRight(.viewport).?;
+
+    const expected = try s.selectionString(alloc, .{
+        .sel = Selection.init(window_tl, viewport_br, false),
+        .trim = false,
+    });
+    defer alloc.free(expected);
+
+    const full = try s.selectionString(alloc, .{
+        .sel = Selection.init(
+            s.pages.getTopLeft(.screen),
+            viewport_br,
+            false,
+        ),
+        .trim = false,
+    });
+    defer alloc.free(full);
+
+    try testing.expectEqualStrings(expected, context.text);
+    try testing.expect(context.text.len < full.len);
 }
 
 test "Screen eraseRows history with more lines" {

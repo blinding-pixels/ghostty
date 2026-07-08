@@ -220,6 +220,8 @@
 				"Ghostty/Surface View/SurfaceGrabHandle.swift",
 				"Ghostty/Surface View/SurfaceScrollView.swift",
 				"Ghostty/Surface View/SurfaceView_AppKit.swift",
+				"Ghostty/Surface View/SurfaceView+AccessibilityProjection.swift",
+				"Ghostty/Surface View/SurfaceView+AccessibilityTypes.swift",
 				Helpers/AppInfo.swift,
 				Helpers/CodableBridge.swift,
 				Helpers/Cursor.swift,
