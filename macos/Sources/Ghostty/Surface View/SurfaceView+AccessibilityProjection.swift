@@ -11,6 +11,8 @@ extension Ghostty.SurfaceView {
     }
 
     func readAccessibilityTextProjection() -> AccessibilityTextProjection {
+        guard accessibilityPipelineEnabled else { return .empty }
+
         if passwordInput {
             return .secureInput(changeInfo: readScreenChangeInfo())
         }
@@ -52,6 +54,8 @@ extension Ghostty.SurfaceView {
     }
 
     func currentAccessibilityTextProjection() -> AccessibilityTextProjection {
+        guard accessibilityPipelineEnabled else { return .empty }
+
         let changeInfo = readScreenChangeInfo()
         _ = announceAccessibilityChange(changeInfo)
 
@@ -77,6 +81,15 @@ extension Ghostty.SurfaceView {
         suppressPostFloodInputEdits = false
         accessibilitySecureAnnouncementPending = passwordInput
         invalidateAccessibilityTextProjection()
+
+        guard accessibilityPipelineEnabled else {
+            lastAccessibilityProjectionGeneration = -1
+            lastAccessibilityNotifiedGeneration = -1
+            lastAccessibilityNotifiedProjection = nil
+            traceAccessibilityCue(
+                "passwordInputAX state=\(passwordInput) disabled")
+            return
+        }
 
         let projection = readAccessibilityTextProjection()
         lastAccessibilityProjectionGeneration = projection.changeInfo.generation
@@ -105,7 +118,7 @@ extension Ghostty.SurfaceView {
             return
         }
         guard accessibilitySecureAnnouncementPending else { return }
-        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        guard accessibilityPipelineEnabled else { return }
         guard window?.firstResponder === self else {
             traceAccessibilityCue(
                 "secureInputAnnouncementDeferred source=\(source) generation=\(changeInfo.generation)")

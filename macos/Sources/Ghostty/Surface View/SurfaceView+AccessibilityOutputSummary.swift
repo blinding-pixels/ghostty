@@ -200,7 +200,7 @@ extension Ghostty.SurfaceView {
         now: TimeInterval,
         sinceLastMs: TimeInterval?
     ) {
-        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        guard accessibilityPipelineEnabled else { return }
         guard window?.firstResponder === self else { return }
         guard !change.usesAlternateScreen else { return }
 
@@ -289,7 +289,7 @@ extension Ghostty.SurfaceView {
     }
 
     func flushAccessibilityFloodSummary() {
-        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        guard accessibilityPipelineEnabled else { return }
         guard window?.firstResponder === self else { return }
         guard let state = accessibilityFloodState,
               state.sawMeaningfulOutput else {

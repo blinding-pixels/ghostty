@@ -82,6 +82,8 @@ extension Ghostty {
         // KVO observer for VoiceOver status. The core accessibility pipeline
         // stays disabled unless VoiceOver is running.
         private var accessibilityVoiceOverObservation: NSKeyValueObservation?
+        private var axWorkspaceLaunchObserver: NSObjectProtocol?
+        private var axWorkspaceTerminateObserver: NSObjectProtocol?
 
         // Whether the pointer should be visible or not
         @Published private(set) var pointerStyle: CursorStyle = .horizontalText
@@ -236,6 +238,7 @@ extension Ghostty {
         var suppressPostFloodInputEdits = false
         var accessibilitySecureAnnouncementPending = false
         var accessibilityReviewSelectedRange: NSRange?
+        var accessibilityPipelineEnabled = false
 
         static let accessibilityTextUpdateDelay: DispatchTimeInterval = .milliseconds(35)
         static let accessibilityFloodFullRows = 12
@@ -388,6 +391,21 @@ extension Ghostty {
                     self?.updateAccessibilityEnabledState()
                 }
             }
+            let workspaceNotifications = NSWorkspace.shared.notificationCenter
+            axWorkspaceLaunchObserver = workspaceNotifications.addObserver(
+                forName: NSWorkspace.didLaunchApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.updateAccessibilityEnabledState()
+            }
+            axWorkspaceTerminateObserver = workspaceNotifications.addObserver(
+                forName: NSWorkspace.didTerminateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.updateAccessibilityEnabledState()
+            }
 
             // Setup our tracking area so we get mouse moved events
             updateTrackingAreas()
@@ -404,6 +422,13 @@ extension Ghostty {
             accessibilityTextUpdateWorkItem?.cancel()
             accessibilityFloodSettleWorkItem?.cancel()
             accessibilityVoiceOverObservation?.invalidate()
+            let workspaceNotifications = NSWorkspace.shared.notificationCenter
+            if let axWorkspaceLaunchObserver {
+                workspaceNotifications.removeObserver(axWorkspaceLaunchObserver)
+            }
+            if let axWorkspaceTerminateObserver {
+                workspaceNotifications.removeObserver(axWorkspaceTerminateObserver)
+            }
 
             // Remove all of our notificationcenter subscriptions
             let center = NotificationCenter.default

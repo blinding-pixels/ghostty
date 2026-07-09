@@ -2,11 +2,26 @@ import AppKit
 import GhosttyKit
 
 extension Ghostty.SurfaceView {
+    static func isVoiceOverProcessRunning() -> Bool {
+        NSWorkspace.shared.runningApplications.contains { application in
+            application.bundleIdentifier == "com.apple.VoiceOver" ||
+                application.executableURL?.path == "/System/Library/CoreServices/VoiceOver.app/Contents/MacOS/VoiceOver"
+        }
+    }
+
+    static func shouldEnableAccessibilityPipeline() -> Bool {
+        NSWorkspace.shared.isVoiceOverEnabled && isVoiceOverProcessRunning()
+    }
+
     func updateAccessibilityEnabledState() {
         guard let surface else { return }
 
-        let enabled = NSWorkspace.shared.isVoiceOverEnabled
+        let enabled = Self.shouldEnableAccessibilityPipeline()
+        let wasEnabled = accessibilityPipelineEnabled
+        accessibilityPipelineEnabled = enabled
         ghostty_surface_set_accessibility_enabled(surface, enabled)
+        guard enabled != wasEnabled else { return }
+
         accessibilityTextUpdateWorkItem?.cancel()
         accessibilityFloodSettleWorkItem?.cancel()
         lastAccessibilityNotifiedProjection = nil
@@ -29,6 +44,8 @@ extension Ghostty.SurfaceView {
     }
 
     func accessibilityScreenChanged(_ change: Ghostty.Action.ScreenChanged) {
+        guard accessibilityPipelineEnabled else { return }
+
         let changeInfo = ScreenChangeInfo(change)
         let now = ProcessInfo.processInfo.systemUptime
         let sinceLastMsValue = lastAccessibilityScreenChangedTraceTime.map {
@@ -81,12 +98,14 @@ extension Ghostty.SurfaceView {
         ].joined(separator: ",")
     }
     func scheduleAccessibilityTextUpdate(_ changeInfo: ScreenChangeInfo? = nil) {
-        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        guard accessibilityPipelineEnabled else { return }
         guard window?.firstResponder === self else { return }
 
         accessibilityTextUpdateWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, self.window?.firstResponder === self else { return }
+            guard let self,
+                  self.accessibilityPipelineEnabled,
+                  self.window?.firstResponder === self else { return }
 
             let resolvedChangeInfo = changeInfo ?? self.readScreenChangeInfo()
             self.accessibilityTextUpdateWorkItem = nil
@@ -102,6 +121,8 @@ extension Ghostty.SurfaceView {
     }
 
     func notifyAccessibilityProjectionIfNeeded(_ change: ScreenChangeInfo) {
+        guard accessibilityPipelineEnabled else { return }
+
         if passwordInput {
             announceAccessibilitySecureInputIfNeeded(change, source: "notification")
             let projection = AccessibilityTextProjection.secureInput(changeInfo: change)
