@@ -1207,6 +1207,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     if (!state.accessibility_change.update(
                         &self.terminal_state,
                         state.terminal.screens.active_key,
+                        &state.accessibility_output,
                     )) break :accessibility null;
 
                     break :accessibility .init(state.accessibility_change);

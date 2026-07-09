@@ -108,6 +108,9 @@ extension Ghostty.SurfaceView {
         let dirtyRowRange: ClosedRange<Int>?
         let dirtyRowCount: Int
         let usesAlternateScreen: Bool
+        let outputBytes: Int
+        let outputNewlines: Int
+        let outputScrollLines: Int
 
         init() {
             self.generation = 0
@@ -116,6 +119,9 @@ extension Ghostty.SurfaceView {
             self.dirtyRowRange = nil
             self.dirtyRowCount = 0
             self.usesAlternateScreen = false
+            self.outputBytes = 0
+            self.outputNewlines = 0
+            self.outputScrollLines = 0
         }
 
         init(_ text: ghostty_accessibility_text_s) {
@@ -134,6 +140,10 @@ extension Ghostty.SurfaceView {
             } else {
                 self.dirtyRowRange = nil
             }
+
+            self.outputBytes = 0
+            self.outputNewlines = 0
+            self.outputScrollLines = 0
         }
 
         init(_ change: ghostty_accessibility_change_s) {
@@ -146,6 +156,9 @@ extension Ghostty.SurfaceView {
             self.cursorColumn = max(Int(change.cursor_col), 0)
             self.dirtyRowCount = max(dirtyCount, 0)
             self.usesAlternateScreen = change.alternate_screen != 0
+            self.outputBytes = max(Int(change.output_bytes), 0)
+            self.outputNewlines = max(Int(change.output_newlines), 0)
+            self.outputScrollLines = max(Int(change.output_scroll_lines), 0)
 
             if dirtyCount > 0 {
                 self.dirtyRowRange = max(dirtyStart, 0)...max(dirtyStart, dirtyEnd)
@@ -160,12 +173,39 @@ extension Ghostty.SurfaceView {
             self.cursorColumn = change.cursorCol
             self.dirtyRowCount = change.dirtyCount
             self.usesAlternateScreen = change.usesAlternateScreen
+            self.outputBytes = change.outputBytes
+            self.outputNewlines = change.outputNewlines
+            self.outputScrollLines = change.outputScrollLines
 
             if change.dirtyCount > 0 {
                 self.dirtyRowRange = change.dirtyStartRow...max(change.dirtyStartRow, change.dirtyEndRow)
             } else {
                 self.dirtyRowRange = nil
             }
+        }
+    }
+
+    struct AccessibilityIOFloodWindow {
+        var startedAt: TimeInterval
+        var bytes: Int = 0
+        var newlines: Int = 0
+        var scrollLines: Int = 0
+
+        mutating func accumulate(
+            _ change: ScreenChangeInfo,
+            now: TimeInterval,
+            windowMs: TimeInterval
+        ) {
+            if now - startedAt > windowMs {
+                startedAt = now
+                bytes = 0
+                newlines = 0
+                scrollLines = 0
+            }
+
+            bytes += change.outputBytes
+            newlines += change.outputNewlines
+            scrollLines += change.outputScrollLines
         }
     }
 
@@ -245,9 +285,11 @@ extension Ghostty.SurfaceView {
     struct AccessibilityFloodState {
         let startedAt: TimeInterval
         var lastChangeAt: TimeInterval
+        var accumulatedBytes: Int
+        var accumulatedNewlines: Int
+        var accumulatedScrollLines: Int
         var maxDirtyRows: Int
         var changedLineEstimate: Int
-        var sawMeaningfulOutput: Bool
         var commandStatus: AccessibilityCommandStatus?
         var baselineProjection: AccessibilityTextProjection?
         var latestProjection: AccessibilityTextProjection?

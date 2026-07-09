@@ -442,6 +442,9 @@ typedef struct {
   uintptr_t dirty_count;
   uintptr_t change_generation;
   uint8_t alternate_screen;
+  uint16_t output_bytes;
+  uint8_t output_newlines;
+  uint8_t output_scroll_lines;
 } ghostty_accessibility_change_s;
 
 typedef enum {
@@ -920,6 +923,9 @@ typedef struct {
   uint16_t dirty_end_row;
   uint16_t dirty_count;
   uint8_t alternate_screen;
+  uint16_t output_bytes;
+  uint8_t output_newlines;
+  uint8_t output_scroll_lines;
 } ghostty_action_screen_changed_s;
 
 // apprt.Action.Key

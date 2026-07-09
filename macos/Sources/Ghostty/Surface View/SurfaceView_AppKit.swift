@@ -234,16 +234,21 @@ extension Ghostty {
         var lastAccessibilityScreenChangedTraceTime: TimeInterval?
         var accessibilityFloodState: AccessibilityFloodState?
         var accessibilityFloodSettleWorkItem: DispatchWorkItem?
+        var accessibilityIOFloodWindow: AccessibilityIOFloodWindow?
+        var accessibilityPostFloodTextSyncPending = false
         var lastAccessibilityCommandStatus: AccessibilityCommandStatus?
-        var suppressPostFloodInputEdits = false
         var accessibilitySecureAnnouncementPending = false
         var accessibilityReviewSelectedRange: NSRange?
         var accessibilityPipelineEnabled = false
 
         static let accessibilityTextUpdateDelay: DispatchTimeInterval = .milliseconds(35)
-        static let accessibilityFloodFullRows = 12
+        static let accessibilityIOFloodWindowMs: TimeInterval = 0.100
+        static let accessibilityIOFloodNewlines = 8
+        static let accessibilityIOFloodBytes = 4096
+        static let accessibilityIOFloodScrollLines = 6
+        static let accessibilityTypingMaxBytes = 200
+        static let accessibilityTypingMaxNewlines = 1
         static let accessibilityFloodFastRows = 6
-        static let accessibilityFloodFastWindowMs: TimeInterval = 75
         static let accessibilityFloodSettleDelay: DispatchTimeInterval = .milliseconds(250)
         static let accessibilityFloodProjectionQuietTime: TimeInterval = 1
         static let accessibilityCommandStatusTTL: TimeInterval = 3

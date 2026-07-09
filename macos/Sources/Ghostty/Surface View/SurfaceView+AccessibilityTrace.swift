@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import GhosttyKit
 
 extension Ghostty.SurfaceView {
@@ -12,13 +13,20 @@ extension Ghostty.SurfaceView {
 
     func traceInput(_ message: @autoclosure () -> String) {
         guard inputTraceEnabled else { return }
-        FileHandle.standardError.write(Data("[input-trace] \(message())\n".utf8))
+        writeAccessibilityTraceLine("[input-trace] \(message())\n")
     }
 
     func traceAccessibilityCue(_ message: @autoclosure () -> String) {
         guard accessibilityCueTraceEnabled else { return }
         let uptime = String(format: "%.3f", ProcessInfo.processInfo.systemUptime)
-        FileHandle.standardError.write(Data("[accessibility-cue-trace] t=\(uptime) \(message())\n".utf8))
+        writeAccessibilityTraceLine(
+            "[accessibility-cue-trace] t=\(uptime) \(message())\n")
+    }
+
+    func writeAccessibilityTraceLine(_ line: String) {
+        line.withCString { pointer in
+            _ = Darwin.write(STDERR_FILENO, pointer, strlen(pointer))
+        }
     }
 
     func traceInputEvent(

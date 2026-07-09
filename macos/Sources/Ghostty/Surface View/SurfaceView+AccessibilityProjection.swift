@@ -78,7 +78,8 @@ extension Ghostty.SurfaceView {
         accessibilityFloodSettleWorkItem?.cancel()
         accessibilityFloodSettleWorkItem = nil
         accessibilityFloodState = nil
-        suppressPostFloodInputEdits = false
+        accessibilityIOFloodWindow = nil
+        accessibilityPostFloodTextSyncPending = false
         accessibilitySecureAnnouncementPending = passwordInput
         invalidateAccessibilityTextProjection()
 

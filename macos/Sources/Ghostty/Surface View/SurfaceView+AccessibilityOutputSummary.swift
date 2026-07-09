@@ -204,86 +204,97 @@ extension Ghostty.SurfaceView {
         guard window?.firstResponder === self else { return }
         guard !change.usesAlternateScreen else { return }
 
+        var window = accessibilityIOFloodWindow ?? AccessibilityIOFloodWindow(startedAt: now)
+        window.accumulate(
+            change,
+            now: now,
+            windowMs: Self.accessibilityIOFloodWindowMs)
+        accessibilityIOFloodWindow = window
+
+        let ioFloodSignal = Self.isAccessibilityIOFloodSignal(
+            frame: change,
+            window: window)
+        let dirtyRowHint = change.dirtyRowCount >= Self.accessibilityFloodFastRows
+
         if var state = accessibilityFloodState {
+            guard ioFloodSignal || dirtyRowHint else {
+                traceAccessibilityCue(
+                    "ignoredFloodExtensionLowIO generation=\(change.generation) outputBytes=\(change.outputBytes) outputNewlines=\(change.outputNewlines) outputScrollLines=\(change.outputScrollLines) dirtyRows=\(change.dirtyRowCount)")
+                return
+            }
+
             state.lastChangeAt = now
+            state.accumulatedBytes += change.outputBytes
+            state.accumulatedNewlines += change.outputNewlines
+            state.accumulatedScrollLines += change.outputScrollLines
             state.maxDirtyRows = max(state.maxDirtyRows, change.dirtyRowCount)
             state.changedLineEstimate = max(
                 state.changedLineEstimate,
+                state.accumulatedNewlines,
                 change.dirtyRowCount)
-            state.sawMeaningfulOutput = true
             accessibilityFloodState = state
             scheduleAccessibilityFloodSummary()
             return
         }
 
-        let fastMultiRowChange = change.dirtyRowCount >= Self.accessibilityFloodFastRows &&
-            (sinceLastMs ?? .greatestFiniteMagnitude) <= Self.accessibilityFloodFastWindowMs
-        let likelyFlood = change.dirtyRowCount >= Self.accessibilityFloodFullRows ||
-            fastMultiRowChange
-        guard likelyFlood else { return }
+        guard ioFloodSignal else { return }
 
-        if accessibilityFloodState == nil {
-            let recentCommandStatus: AccessibilityCommandStatus? = {
-                guard let status = lastAccessibilityCommandStatus,
-                      now - status.finishedAt <= Self.accessibilityCommandStatusTTL else {
-                    return nil
-                }
-                return status
-            }()
-            accessibilityFloodState = AccessibilityFloodState(
-                startedAt: now,
-                lastChangeAt: now,
-                maxDirtyRows: change.dirtyRowCount,
-                changedLineEstimate: max(change.dirtyRowCount, 1),
-                sawMeaningfulOutput: true,
-                commandStatus: recentCommandStatus,
-                baselineProjection: lastAccessibilityNotifiedProjection,
-                latestProjection: nil)
-            traceAccessibilityCue(
-                "floodCandidate generation=\(change.generation) dirtyRows=\(change.dirtyRowCount) sinceLastMs=\(sinceLastMs.map { String(format: "%.1f", $0) } ?? "nil")")
-        }
-
-        scheduleAccessibilityFloodSummary()
-    }
-
-    func updateAccessibilityFloodState(
-        lineMetrics: AccessibilityProjectionLineMetrics?,
-        latestProjection: AccessibilityTextProjection
-    ) {
-        guard var state = accessibilityFloodState else { return }
-        state.latestProjection = latestProjection
-
-        if Self.isAccessibilityFloodOutput(lineMetrics) {
-            state.sawMeaningfulOutput = true
-            if let lineMetrics {
-                state.changedLineEstimate = max(
-                    state.changedLineEstimate,
-                    lineMetrics.changedVisibleLineCount,
-                    lineMetrics.insertedLineBreakCount + 1)
+        let recentCommandStatus: AccessibilityCommandStatus? = {
+            guard let status = lastAccessibilityCommandStatus,
+                  now - status.finishedAt <= Self.accessibilityCommandStatusTTL else {
+                return nil
             }
-        }
-
-        if let status = lastAccessibilityCommandStatus,
-           state.commandStatus == nil,
-           status.finishedAt >= state.startedAt - Self.accessibilityCommandStatusTTL {
-            state.commandStatus = status
-        }
-
-        accessibilityFloodState = state
+            return status
+        }()
+        accessibilityFloodState = AccessibilityFloodState(
+            startedAt: now,
+            lastChangeAt: now,
+            accumulatedBytes: change.outputBytes,
+            accumulatedNewlines: change.outputNewlines,
+            accumulatedScrollLines: change.outputScrollLines,
+            maxDirtyRows: change.dirtyRowCount,
+            changedLineEstimate: max(change.outputNewlines, change.dirtyRowCount, 1),
+            commandStatus: recentCommandStatus,
+            baselineProjection: lastAccessibilityNotifiedProjection,
+            latestProjection: nil)
+        announceAccessibility(
+            "Burst output. Please wait for command to finish.",
+            priority: .medium)
+        traceAccessibilityCue(
+            "floodCandidate generation=\(change.generation) outputBytes=\(change.outputBytes) outputNewlines=\(change.outputNewlines) outputScrollLines=\(change.outputScrollLines) windowBytes=\(window.bytes) windowNewlines=\(window.newlines) windowScrollLines=\(window.scrollLines) dirtyRows=\(change.dirtyRowCount) sinceLastMs=\(sinceLastMs.map { String(format: "%.1f", $0) } ?? "nil")")
         scheduleAccessibilityFloodSummary()
     }
 
-    static func isAccessibilityFloodOutput(
-        _ lineMetrics: AccessibilityProjectionLineMetrics?
+    static func isAccessibilityTypingFrame(_ change: ScreenChangeInfo) -> Bool {
+        change.outputNewlines <= accessibilityTypingMaxNewlines &&
+            change.outputBytes < accessibilityTypingMaxBytes &&
+            change.outputScrollLines == 0
+    }
+
+    static func isAccessibilityIOFloodFrame(_ change: ScreenChangeInfo) -> Bool {
+        guard !isAccessibilityTypingFrame(change) else { return false }
+
+        return change.outputNewlines >= accessibilityIOFloodNewlines ||
+            change.outputBytes >= accessibilityIOFloodBytes ||
+            change.outputScrollLines >= accessibilityIOFloodScrollLines
+    }
+
+    static func isAccessibilityIOFloodWindow(_ window: AccessibilityIOFloodWindow) -> Bool {
+        window.newlines >= accessibilityIOFloodNewlines ||
+            window.bytes >= accessibilityIOFloodBytes ||
+            window.scrollLines >= accessibilityIOFloodScrollLines
+    }
+
+    static func isAccessibilityIOFloodSignal(
+        frame: ScreenChangeInfo,
+        window: AccessibilityIOFloodWindow
     ) -> Bool {
-        guard let lineMetrics else { return false }
-        return lineMetrics.changedVisibleLineCount >= accessibilityFloodFastRows ||
-            lineMetrics.insertedLineBreakCount >= accessibilityFloodFastRows
+        if isAccessibilityIOFloodFrame(frame) { return true }
+        return isAccessibilityIOFloodWindow(window)
     }
 
     func scheduleAccessibilityFloodSummary() {
-        guard let state = accessibilityFloodState,
-              state.sawMeaningfulOutput else { return }
+        guard accessibilityFloodState != nil else { return }
 
         accessibilityFloodSettleWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
@@ -298,9 +309,8 @@ extension Ghostty.SurfaceView {
     func flushAccessibilityFloodSummary() {
         guard accessibilityPipelineEnabled else { return }
         guard window?.firstResponder === self else { return }
-        guard var state = accessibilityFloodState,
-              state.sawMeaningfulOutput else {
-            accessibilityFloodState = nil
+        guard var state = accessibilityFloodState else {
+            accessibilityIOFloodWindow = nil
             return
         }
 
@@ -318,6 +328,7 @@ extension Ghostty.SurfaceView {
 
         accessibilityFloodSettleWorkItem = nil
         accessibilityFloodState = nil
+        accessibilityIOFloodWindow = nil
         if let latestProjection = refreshAccessibilityProjectionAfterFlood() {
             state.latestProjection = latestProjection
         }
@@ -354,9 +365,9 @@ extension Ghostty.SurfaceView {
         }
 
         announceAccessibility(message, priority: priority)
-        suppressPostFloodInputEdits = true
+        accessibilityPostFloodTextSyncPending = true
         traceAccessibilityCue(
-            "floodSummary source=\(summary.source) semanticOutput=\(summary.semanticOutput) lineCount=\(summary.lineCount) exitCode=\(status?.exitCode.map(String.init) ?? "nil") suppressInputEdits=true message=\(Self.traceString(message))")
+            "floodSummary source=\(summary.source) semanticOutput=\(summary.semanticOutput) lineCount=\(summary.lineCount) exitCode=\(status?.exitCode.map(String.init) ?? "nil") message=\(Self.traceString(message))")
     }
 
     func refreshAccessibilityProjectionAfterFlood() -> AccessibilityTextProjection? {
@@ -386,30 +397,19 @@ extension Ghostty.SurfaceView {
         return nil
     }
 
-    static func isAccessibilityInputOnlyEdit(
-        lineMetrics: AccessibilityProjectionLineMetrics?,
-        diff: AccessibilityTextEditDiff?
-    ) -> Bool {
-        guard let lineMetrics,
-              let diff,
-              diff.hasChange else { return false }
-        guard lineMetrics.classification == "singleLine" ||
-            lineMetrics.classification == "unchanged" else { return false }
-
-        return diff.insertedText.rangeOfCharacter(from: .newlines) == nil &&
-            diff.deletedText.rangeOfCharacter(from: .newlines) == nil
-    }
-
-    func announceAccessibilityPostFloodInputEdit(
+    static func shouldAnnounceAccessibilityDeletedText(
         _ diff: AccessibilityTextEditDiff
-    ) {
-        if !diff.insertedText.isEmpty {
-            let inserted = Self.accessibilitySummaryLine(diff.insertedText)
-            if !inserted.isEmpty {
-                announceAccessibility(inserted, priority: .medium)
-            }
-        } else if !diff.deletedText.isEmpty {
-            announceAccessibility("Deleted", priority: .medium)
+    ) -> Bool {
+        guard !diff.deletedText.isEmpty else { return false }
+
+        let deletedLineBreaks = accessibilityLineBreakCount(in: diff.deletedText)
+        let insertedLineBreaks = accessibilityLineBreakCount(in: diff.insertedText)
+        if !diff.insertedText.isEmpty &&
+            deletedLineBreaks > 0 &&
+            insertedLineBreaks > 0 {
+            return false
         }
+
+        return true
     }
 }

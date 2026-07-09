@@ -82,6 +82,10 @@ pub const StreamHandler = struct {
     /// this to determine if we need to default the window title.
     seen_title: bool = false,
 
+    inline fn recordAccessibilityScroll(self: *StreamHandler, count: usize) void {
+        self.renderer_state.accessibility_output.recordScroll(count);
+    }
+
     pub const Stream = terminal.Stream(StreamHandler);
 
     /// True if we have tmux control mode built in.
@@ -256,8 +260,14 @@ pub const StreamHandler = struct {
             .insert_lines => self.terminal.insertLines(value),
             .insert_blanks => self.terminal.insertBlanks(value),
             .delete_lines => self.terminal.deleteLines(value),
-            .scroll_up => try self.terminal.scrollUp(value),
-            .scroll_down => self.terminal.scrollDown(value),
+            .scroll_up => {
+                try self.terminal.scrollUp(value);
+                self.recordAccessibilityScroll(value);
+            },
+            .scroll_down => {
+                self.terminal.scrollDown(value);
+                self.recordAccessibilityScroll(value);
+            },
             .tab_clear_current => self.terminal.tabClear(.current),
             .tab_clear_all => self.terminal.tabClear(.all),
             .tab_set => self.terminal.tabSet(),
@@ -602,7 +612,7 @@ pub const StreamHandler = struct {
     inline fn linefeed(self: *StreamHandler) !void {
         // Small optimization: call index instead of linefeed because they're
         // identical and this avoids one layer of function call overhead.
-        try self.terminal.index();
+        try self.index();
     }
 
     pub inline fn reverseIndex(self: *StreamHandler) !void {
@@ -610,11 +620,14 @@ pub const StreamHandler = struct {
     }
 
     pub inline fn index(self: *StreamHandler) !void {
+        const at_scroll_bottom = self.terminal.screens.active.cursor.y ==
+            self.terminal.scrolling_region.bottom;
         try self.terminal.index();
+        if (at_scroll_bottom) self.recordAccessibilityScroll(1);
     }
 
     pub inline fn nextLine(self: *StreamHandler) !void {
-        try self.terminal.index();
+        try self.index();
         self.terminal.carriageReturn();
     }
 

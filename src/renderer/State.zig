@@ -23,6 +23,9 @@ inspector: ?*Inspector = null,
 /// Last compact terminal change summary captured by the renderer.
 accessibility_change: terminalpkg.RenderState.AccessibilityChange = .{},
 
+/// PTY output counters accumulated since the last render frame.
+accessibility_output: terminalpkg.RenderState.AccessibilityOutputAccum = .{},
+
 /// True when the app has an active accessibility consumer for terminal text.
 accessibility_enabled: bool = false,
 

@@ -124,6 +124,9 @@ extension Ghostty.Action {
         let dirtyCount: Int
         let generation: Int
         let usesAlternateScreen: Bool
+        let outputBytes: Int
+        let outputNewlines: Int
+        let outputScrollLines: Int
 
         init(c: ghostty_action_screen_changed_s) {
             cursorRow = max(Int(c.cursor_row), 0)
@@ -133,6 +136,9 @@ extension Ghostty.Action {
             dirtyCount = max(Int(c.dirty_count), 0)
             generation = max(Int(c.change_generation), 0)
             usesAlternateScreen = c.alternate_screen != 0
+            outputBytes = max(Int(c.output_bytes), 0)
+            outputNewlines = max(Int(c.output_newlines), 0)
+            outputScrollLines = max(Int(c.output_scroll_lines), 0)
         }
     }
 

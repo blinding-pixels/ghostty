@@ -238,6 +238,59 @@ pub const RenderState = struct {
         "full",
     });
 
+    pub const AccessibilityOutputAccum = struct {
+        bytes: u16 = 0,
+        newlines: u8 = 0,
+        scroll_lines: u8 = 0,
+
+        pub const Frame = struct {
+            bytes: u16 = 0,
+            newlines: u8 = 0,
+            scroll_lines: u8 = 0,
+        };
+
+        pub fn recordBytes(self: *AccessibilityOutputAccum, buf: []const u8) void {
+            const add: u16 = @intCast(@min(buf.len, std.math.maxInt(u16) - self.bytes));
+            self.bytes +%= add;
+            for (buf) |byte| {
+                if (byte == '\n' and self.newlines < std.math.maxInt(u8)) {
+                    self.newlines +%= 1;
+                }
+            }
+        }
+
+        pub fn recordScroll(self: *AccessibilityOutputAccum, count: usize) void {
+            const remaining = std.math.maxInt(u8) - self.scroll_lines;
+            const add: u8 = @intCast(@min(count, remaining));
+            self.scroll_lines +%= add;
+        }
+
+        pub fn take(self: *AccessibilityOutputAccum) Frame {
+            const frame: Frame = .{
+                .bytes = self.bytes,
+                .newlines = self.newlines,
+                .scroll_lines = self.scroll_lines,
+            };
+            self.* = .{};
+            return frame;
+        }
+
+        pub fn hasOutput(self: AccessibilityOutputAccum) bool {
+            return self.bytes > 0 or self.newlines > 0 or self.scroll_lines > 0;
+        }
+
+        pub fn isFloodSignal(frame: Frame) bool {
+            const typing_exempt = frame.newlines <= 1 and
+                frame.bytes < 200 and
+                frame.scroll_lines == 0;
+            if (typing_exempt) return false;
+
+            return frame.newlines >= 8 or
+                frame.bytes >= 4096 or
+                frame.scroll_lines >= 6;
+        }
+    };
+
     pub const AccessibilityChange = struct {
         generation: usize = 0,
         cursor_row: usize = 0,
@@ -246,11 +299,15 @@ pub const RenderState = struct {
         dirty_end_row: usize = 0,
         dirty_count: usize = 0,
         alternate_screen: bool = false,
+        output_bytes: u16 = 0,
+        output_newlines: u8 = 0,
+        output_scroll_lines: u8 = 0,
 
         pub fn update(
             self: *AccessibilityChange,
             render_state: *const RenderState,
             active_screen: ScreenSet.Key,
+            output_accum: *AccessibilityOutputAccum,
         ) bool {
             const cursor_row: usize = @intCast(render_state.cursor.active.y);
             const cursor_col: usize = @intCast(render_state.cursor.active.x);
@@ -279,10 +336,13 @@ pub const RenderState = struct {
             if (dirty_count == 0 and
                 self.cursor_row == cursor_row and
                 self.cursor_col == cursor_col and
-                self.alternate_screen == alternate_screen)
+                self.alternate_screen == alternate_screen and
+                !output_accum.hasOutput())
             {
                 return false;
             }
+
+            const output = output_accum.take();
 
             self.generation +%= 1;
             self.cursor_row = cursor_row;
@@ -291,6 +351,9 @@ pub const RenderState = struct {
             self.dirty_start_row = dirty_start_row;
             self.dirty_end_row = dirty_end_row;
             self.dirty_count = dirty_count;
+            self.output_bytes = output.bytes;
+            self.output_newlines = output.newlines;
+            self.output_scroll_lines = output.scroll_lines;
             return true;
         }
     };
@@ -1175,11 +1238,12 @@ test "dirty state" {
     var state: RenderState = .empty;
     defer state.deinit(alloc);
     var change: RenderState.AccessibilityChange = .{};
+    var output_accum: RenderState.AccessibilityOutputAccum = .{};
 
     // First update should trigger redraw due to resize
     try state.update(alloc, &t);
     try testing.expectEqual(.full, state.dirty);
-    try testing.expect(change.update(&state, .primary));
+    try testing.expect(change.update(&state, .primary, &output_accum));
     try testing.expectEqual(@as(usize, 1), change.generation);
     try testing.expectEqual(@as(usize, 0), change.dirty_start_row);
     try testing.expectEqual(@as(usize, 4), change.dirty_end_row);
@@ -1197,7 +1261,7 @@ test "dirty state" {
     // Second update with no changes - no dirty rows
     try state.update(alloc, &t);
     try testing.expectEqual(.false, state.dirty);
-    try testing.expect(!change.update(&state, .primary));
+    try testing.expect(!change.update(&state, .primary, &output_accum));
     try testing.expectEqual(@as(usize, 1), change.generation);
     {
         const row_data = state.row_data.slice();
@@ -1206,18 +1270,18 @@ test "dirty state" {
     }
 
     // Active screen changes are accessibility changes even without dirty rows.
-    try testing.expect(change.update(&state, .alternate));
+    try testing.expect(change.update(&state, .alternate, &output_accum));
     try testing.expectEqual(@as(usize, 2), change.generation);
     try testing.expectEqual(@as(usize, 0), change.dirty_count);
     try testing.expect(change.alternate_screen);
-    try testing.expect(!change.update(&state, .alternate));
+    try testing.expect(!change.update(&state, .alternate, &output_accum));
     try testing.expectEqual(@as(usize, 2), change.generation);
 
     // Write to first line
     s.nextSlice("A");
     try state.update(alloc, &t);
     try testing.expectEqual(.partial, state.dirty);
-    try testing.expect(change.update(&state, .alternate));
+    try testing.expect(change.update(&state, .alternate, &output_accum));
     try testing.expectEqual(@as(usize, 3), change.generation);
     try testing.expectEqual(@as(usize, 0), change.cursor_row);
     try testing.expectEqual(@as(usize, 1), change.cursor_col);
@@ -1231,6 +1295,60 @@ test "dirty state" {
         try testing.expect(dirty[0]); // First row dirty
         try testing.expect(!dirty[1]); // Second row clean
     }
+}
+
+test "accessibility output accum and flood signal" {
+    const testing = std.testing;
+
+    var accum: RenderState.AccessibilityOutputAccum = .{};
+    accum.recordBytes("a");
+    try testing.expectEqual(@as(u16, 1), accum.bytes);
+    try testing.expectEqual(@as(u8, 0), accum.newlines);
+    try testing.expect(!RenderState.AccessibilityOutputAccum.isFloodSignal(accum.take()));
+
+    accum.recordBytes("yes\nyes\nyes\nyes\nyes\nyes\nyes\nyes\n");
+    const burst = accum.take();
+    try testing.expectEqual(@as(u8, 8), burst.newlines);
+    try testing.expect(RenderState.AccessibilityOutputAccum.isFloodSignal(burst));
+
+    accum.recordBytes("hello");
+    const typing = accum.take();
+    try testing.expect(!RenderState.AccessibilityOutputAccum.isFloodSignal(typing));
+
+    accum.recordScroll(6);
+    const scroll = accum.take();
+    try testing.expect(RenderState.AccessibilityOutputAccum.isFloodSignal(scroll));
+}
+
+test "accessibility change reports io output without dirty rows" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try Terminal.init(alloc, .{
+        .cols = 10,
+        .rows = 5,
+    });
+    defer t.deinit(alloc);
+
+    var state: RenderState = .empty;
+    defer state.deinit(alloc);
+    var change: RenderState.AccessibilityChange = .{};
+    var output_accum: RenderState.AccessibilityOutputAccum = .{};
+
+    try state.update(alloc, &t);
+    _ = change.update(&state, .primary, &output_accum);
+
+    state.dirty = .false;
+    {
+        const row_data = state.row_data.slice();
+        const dirty = row_data.items(.dirty);
+        @memset(dirty, false);
+    }
+
+    output_accum.recordBytes("y\ny\ny\ny\ny\ny\ny\ny\n");
+    try testing.expect(change.update(&state, .primary, &output_accum));
+    try testing.expectEqual(@as(u8, 8), change.output_newlines);
+    try testing.expectEqual(@as(usize, 0), change.dirty_count);
 }
 
 test "colors" {

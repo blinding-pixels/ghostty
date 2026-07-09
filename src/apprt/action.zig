@@ -1019,6 +1019,9 @@ pub const ScreenChanged = extern struct {
     dirty_end_row: u16,
     dirty_count: u16,
     alternate_screen: u8,
+    output_bytes: u16,
+    output_newlines: u8,
+    output_scroll_lines: u8,
 
     pub fn init(change: terminal.RenderState.AccessibilityChange) ScreenChanged {
         return .{
@@ -1029,6 +1032,9 @@ pub const ScreenChanged = extern struct {
             .dirty_end_row = intCastSaturated(u16, change.dirty_end_row),
             .dirty_count = intCastSaturated(u16, change.dirty_count),
             .alternate_screen = @intFromBool(change.alternate_screen),
+            .output_bytes = change.output_bytes,
+            .output_newlines = change.output_newlines,
+            .output_scroll_lines = change.output_scroll_lines,
         };
     }
 

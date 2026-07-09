@@ -1340,6 +1340,9 @@ pub const CAPI = struct {
         dirty_count: usize,
         change_generation: usize,
         alternate_screen: u8,
+        output_bytes: u16,
+        output_newlines: u8,
+        output_scroll_lines: u8,
     };
 
     // ghostty_point_s
@@ -1799,6 +1802,9 @@ pub const CAPI = struct {
             .dirty_count = change.dirty_count,
             .change_generation = change.generation,
             .alternate_screen = @intFromBool(change.alternate_screen),
+            .output_bytes = change.output_bytes,
+            .output_newlines = change.output_newlines,
+            .output_scroll_lines = change.output_scroll_lines,
         };
         return true;
     }
