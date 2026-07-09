@@ -245,6 +245,7 @@ extension Ghostty {
         static let accessibilityFloodFastRows = 6
         static let accessibilityFloodFastWindowMs: TimeInterval = 75
         static let accessibilityFloodSettleDelay: DispatchTimeInterval = .milliseconds(250)
+        static let accessibilityFloodProjectionQuietTime: TimeInterval = 1
         static let accessibilityCommandStatusTTL: TimeInterval = 3
         static let accessibilitySummaryLineLimit = 160
 

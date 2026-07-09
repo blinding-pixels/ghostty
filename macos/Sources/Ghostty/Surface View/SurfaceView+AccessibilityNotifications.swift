@@ -137,6 +137,15 @@ extension Ghostty.SurfaceView {
         }
 
         guard change.generation != lastAccessibilityNotifiedGeneration else { return }
+
+        if let floodState = accessibilityFloodState,
+           floodState.sawMeaningfulOutput {
+            lastAccessibilityNotifiedGeneration = change.generation
+            traceAccessibilityCue(
+                "suppressedFloodNotificationCheap requestedGeneration=\(change.generation) dirtyRows=\(change.dirtyRowCount) dirtyRange=\(Self.traceRange(change.dirtyRowRange))")
+            return
+        }
+
         let oldProjection = lastAccessibilityNotifiedProjection
         lastAccessibilityNotifiedGeneration = change.generation
         lastAccessibilityProjectionGeneration = change.generation

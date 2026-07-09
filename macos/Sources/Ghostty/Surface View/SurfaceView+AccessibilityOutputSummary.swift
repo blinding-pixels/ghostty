@@ -204,6 +204,18 @@ extension Ghostty.SurfaceView {
         guard window?.firstResponder === self else { return }
         guard !change.usesAlternateScreen else { return }
 
+        if var state = accessibilityFloodState {
+            state.lastChangeAt = now
+            state.maxDirtyRows = max(state.maxDirtyRows, change.dirtyRowCount)
+            state.changedLineEstimate = max(
+                state.changedLineEstimate,
+                change.dirtyRowCount)
+            state.sawMeaningfulOutput = true
+            accessibilityFloodState = state
+            scheduleAccessibilityFloodSummary()
+            return
+        }
+
         let fastMultiRowChange = change.dirtyRowCount >= Self.accessibilityFloodFastRows &&
             (sinceLastMs ?? .greatestFiniteMagnitude) <= Self.accessibilityFloodFastWindowMs
         let likelyFlood = change.dirtyRowCount >= Self.accessibilityFloodFullRows ||
@@ -223,20 +235,15 @@ extension Ghostty.SurfaceView {
                 lastChangeAt: now,
                 maxDirtyRows: change.dirtyRowCount,
                 changedLineEstimate: max(change.dirtyRowCount, 1),
-                sawMeaningfulOutput: false,
+                sawMeaningfulOutput: true,
                 commandStatus: recentCommandStatus,
                 baselineProjection: lastAccessibilityNotifiedProjection,
                 latestProjection: nil)
             traceAccessibilityCue(
                 "floodCandidate generation=\(change.generation) dirtyRows=\(change.dirtyRowCount) sinceLastMs=\(sinceLastMs.map { String(format: "%.1f", $0) } ?? "nil")")
-        } else if var state = accessibilityFloodState {
-            state.lastChangeAt = now
-            state.maxDirtyRows = max(state.maxDirtyRows, change.dirtyRowCount)
-            state.changedLineEstimate = max(
-                state.changedLineEstimate,
-                change.dirtyRowCount)
-            accessibilityFloodState = state
         }
+
+        scheduleAccessibilityFloodSummary()
     }
 
     func updateAccessibilityFloodState(
@@ -291,21 +298,35 @@ extension Ghostty.SurfaceView {
     func flushAccessibilityFloodSummary() {
         guard accessibilityPipelineEnabled else { return }
         guard window?.firstResponder === self else { return }
-        guard let state = accessibilityFloodState,
+        guard var state = accessibilityFloodState,
               state.sawMeaningfulOutput else {
             accessibilityFloodState = nil
             return
         }
 
+        let status = accessibilityCommandStatus(for: state)
+        let quietFor = ProcessInfo.processInfo.systemUptime - state.lastChangeAt
+        if status == nil,
+           quietFor < Self.accessibilityFloodProjectionQuietTime {
+            accessibilityFloodSettleWorkItem = nil
+            accessibilityFloodState = state
+            scheduleAccessibilityFloodSummary()
+            traceAccessibilityCue(
+                "deferredFloodSummary quietMs=\(String(format: "%.1f", quietFor * 1000))")
+            return
+        }
+
         accessibilityFloodSettleWorkItem = nil
         accessibilityFloodState = nil
+        if let latestProjection = refreshAccessibilityProjectionAfterFlood() {
+            state.latestProjection = latestProjection
+        }
 
         let fallback = accessibilityFallbackCommandOutputSummary(for: state)
         let summary = readAccessibilityCommandOutputSummary(fallback: fallback)
         let lineLabel = summary.source == "visibleEstimate"
             ? Self.accessibilityVisibleLineLabel(summary.lineCount)
             : Self.accessibilityLineLabel(summary.lineCount)
-        let status = accessibilityCommandStatus(for: state)
         let message: String
         let priority: NSAccessibilityPriorityLevel
 
@@ -336,6 +357,17 @@ extension Ghostty.SurfaceView {
         suppressPostFloodInputEdits = true
         traceAccessibilityCue(
             "floodSummary source=\(summary.source) semanticOutput=\(summary.semanticOutput) lineCount=\(summary.lineCount) exitCode=\(status?.exitCode.map(String.init) ?? "nil") suppressInputEdits=true message=\(Self.traceString(message))")
+    }
+
+    func refreshAccessibilityProjectionAfterFlood() -> AccessibilityTextProjection? {
+        guard !passwordInput else { return nil }
+
+        invalidateAccessibilityTextProjection()
+        let projection = cachedAccessibilityTextProjection.get()
+        lastAccessibilityProjectionGeneration = projection.changeInfo.generation
+        lastAccessibilityNotifiedGeneration = projection.changeInfo.generation
+        lastAccessibilityNotifiedProjection = projection
+        return projection
     }
 
     func accessibilityCommandStatus(
