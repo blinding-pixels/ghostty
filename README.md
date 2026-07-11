@@ -1,3 +1,11 @@
+## Research Fork Notice
+
+This repository is an independent research fork for accessibility experiments.
+It is not affiliated with, endorsed by, or maintained by the official Ghostty
+project or the Ghostty app maintainers. For the official Ghostty project, use
+the [ghostty-org/ghostty](https://github.com/ghostty-org/ghostty) repository and
+[ghostty.org](https://ghostty.org).
+
 <!-- LOGO -->
 <h1>
 <p align="center">
