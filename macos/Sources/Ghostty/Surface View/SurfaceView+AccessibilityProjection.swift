@@ -50,7 +50,111 @@ extension Ghostty.SurfaceView {
         cachedAccessibilityTextProjection.invalidate()
         cachedScreenContents.invalidate()
         cachedVisibleContents.invalidate()
+        // Keep an explicit VoiceOver review range across redraws. It is rebased
+        // once the replacement projection is available; clearing it here makes
+        // AppKit fall back to the live terminal cursor.
+    }
+
+    func clearAccessibilityReviewSelection() {
         accessibilityReviewSelectedRange = nil
+    }
+
+    func returnAccessibilityReviewToPrompt() -> Bool {
+        guard accessibilityPipelineEnabled else { return false }
+        guard window?.makeFirstResponder(self) == true else { return false }
+
+        let projection = currentAccessibilityTextProjection()
+        accessibilityReviewSelectedRange = projection.cursorRange
+        NSAccessibility.post(
+            element: self,
+            notification: .selectedTextChanged,
+            userInfo: accessibilitySelectedTextChangedUserInfo(
+                changeType: AccessibilityTextNotification.TextStateChangeType.selectionMove,
+                focusChanged: true))
+        announceAccessibility("Enter terminal prompt", priority: .high)
+        traceAccessibilityCue(
+            "returnedToPrompt generation=\(projection.changeInfo.generation) range={\(projection.cursorRange.location),\(projection.cursorRange.length)}")
+        return true
+    }
+
+    func reconcileAccessibilityReviewSelection(
+        from oldProjection: AccessibilityTextProjection?,
+        to newProjection: AccessibilityTextProjection
+    ) {
+        guard let reviewRange = accessibilityReviewSelectedRange else {
+            return
+        }
+
+        let rebasedRange: NSRange
+        if let oldProjection {
+            rebasedRange = Self.rebasedAccessibilityRange(
+                reviewRange,
+                from: oldProjection.text,
+                to: newProjection.text)
+        } else {
+            rebasedRange = reviewRange
+        }
+
+        accessibilityReviewSelectedRange = clampedAccessibilityRange(
+            rebasedRange,
+            length: newProjection.utf16Length)
+    }
+
+    static func rebasedAccessibilityRange(
+        _ range: NSRange,
+        from oldText: String,
+        to newText: String
+    ) -> NSRange {
+        let oldUnits = Array(oldText.utf16)
+        let newUnits = Array(newText.utf16)
+        let oldLength = oldUnits.count
+        let newLength = newUnits.count
+
+        let oldStart = min(max(range.location, 0), oldLength)
+        let oldEnd = min(
+            max(range.location + max(range.length, 0), oldStart),
+            oldLength)
+
+        guard oldUnits != newUnits else {
+            return NSRange(location: oldStart, length: oldEnd - oldStart)
+        }
+
+        let sharedCount = min(oldLength, newLength)
+        var prefix = 0
+        while prefix < sharedCount && oldUnits[prefix] == newUnits[prefix] {
+            prefix += 1
+        }
+
+        var suffix = 0
+        while prefix + suffix < oldLength &&
+            prefix + suffix < newLength &&
+            oldUnits[oldLength - suffix - 1] == newUnits[newLength - suffix - 1] {
+            suffix += 1
+        }
+
+        let oldEditEnd = oldLength - suffix
+        let newEditEnd = newLength - suffix
+        let insertedLength = newEditEnd - prefix
+        let delta = newLength - oldLength
+
+        func mapOffset(_ offset: Int, preferAfterInsertion: Bool) -> Int {
+            if offset < prefix { return offset }
+            if offset > oldEditEnd { return offset + delta }
+            if oldEditEnd == prefix {
+                return offset + (preferAfterInsertion ? delta : 0)
+            }
+            if offset == oldEditEnd { return offset + delta }
+            if offset == prefix { return offset }
+            return prefix + min(offset - prefix, insertedLength)
+        }
+
+        let newStart = min(
+            max(mapOffset(oldStart, preferAfterInsertion: true), 0),
+            newLength)
+        let newEnd = min(
+            max(mapOffset(oldEnd, preferAfterInsertion: false), newStart),
+            newLength)
+        return NSRange(location: newStart, length: newEnd - newStart)
     }
 
     func currentAccessibilityTextProjection() -> AccessibilityTextProjection {
@@ -65,8 +169,15 @@ extension Ghostty.SurfaceView {
         }
 
         if changeInfo.generation != lastAccessibilityProjectionGeneration {
+            let oldProjection = accessibilityReviewSelectedRange.map { _ in
+                cachedAccessibilityTextProjection.get()
+            }
             lastAccessibilityProjectionGeneration = changeInfo.generation
             invalidateAccessibilityTextProjection()
+            let newProjection = cachedAccessibilityTextProjection.get()
+            reconcileAccessibilityReviewSelection(
+                from: oldProjection,
+                to: newProjection)
         }
 
         return cachedAccessibilityTextProjection.get()
@@ -80,7 +191,9 @@ extension Ghostty.SurfaceView {
         accessibilityFloodState = nil
         accessibilityIOFloodWindow = nil
         accessibilityPostFloodTextSyncPending = false
+        lastAccessibilityCommandOutputSnapshot = nil
         accessibilitySecureAnnouncementPending = passwordInput
+        clearAccessibilityReviewSelection()
         invalidateAccessibilityTextProjection()
 
         guard accessibilityPipelineEnabled else {

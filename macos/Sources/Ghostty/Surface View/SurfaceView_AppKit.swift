@@ -237,13 +237,15 @@ extension Ghostty {
         var accessibilityIOFloodWindow: AccessibilityIOFloodWindow?
         var accessibilityPostFloodTextSyncPending = false
         var lastAccessibilityCommandStatus: AccessibilityCommandStatus?
+        var lastAccessibilityCommandOutputSnapshot: AccessibilityCommandOutputSnapshot?
         var accessibilitySecureAnnouncementPending = false
         var accessibilityReviewSelectedRange: NSRange?
         var accessibilityPipelineEnabled = false
+        var accessibilityBurstSuppressionEnabled = true
 
         static let accessibilityTextUpdateDelay: DispatchTimeInterval = .milliseconds(35)
         static let accessibilityIOFloodWindowMs: TimeInterval = 0.100
-        static let accessibilityIOFloodNewlines = 8
+        static let accessibilityIOFloodNewlines = 6
         static let accessibilityIOFloodBytes = 4096
         static let accessibilityIOFloodScrollLines = 6
         static let accessibilityTypingMaxBytes = 200
@@ -471,6 +473,7 @@ extension Ghostty {
             guard let surface = self.surface else { return }
             guard self.focused != focused else { return }
             self.focused = focused
+            clearAccessibilityReviewSelection()
 
             // If we lost our focus then remove the mouse event suppression so
             // our mouse release event leaving the surface can properly be
@@ -1126,6 +1129,27 @@ extension Ghostty {
         override func keyDown(with event: NSEvent) {
             traceInputEvent("keyDown.begin", event: event)
 
+            if Self.isAccessibilityPromptShortcut(event),
+               returnAccessibilityReviewToPrompt() {
+                traceInput("keyDown.return accessibilityPrompt")
+                return
+            }
+            if Self.isAccessibilityBurstSuppressionShortcut(event),
+               toggleAccessibilityBurstSuppression() {
+                traceInput("keyDown.return accessibilityBurstSuppression")
+                return
+            }
+            if Self.isAccessibilityLastOutputStartShortcut(event),
+               returnAccessibilityReviewToLastCommandOutput(anchor: .start) {
+                traceInput("keyDown.return accessibilityLastOutputStart")
+                return
+            }
+            if Self.isAccessibilityLastOutputEndShortcut(event),
+               returnAccessibilityReviewToLastCommandOutput(anchor: .end) {
+                traceInput("keyDown.return accessibilityLastOutputEnd")
+                return
+            }
+
             guard let surface = self.surface else {
                 self.interpretKeyEvents([event])
                 return
@@ -1335,6 +1359,68 @@ extension Ghostty {
         /// timestamp so we have to protect against that. Fun!
         var lastPerformKeyEvent: TimeInterval?
 
+        static func isAccessibilityPromptShortcut(_ event: NSEvent) -> Bool {
+            guard event.type == .keyDown else { return false }
+            guard event.charactersIgnoringModifiers?.lowercased() == "z" else { return false }
+
+            let relevantModifiers = event.modifierFlags.intersection([
+                .shift,
+                .control,
+                .option,
+                .command,
+                .function,
+            ])
+            return relevantModifiers == [.shift, .function]
+        }
+
+        static func isAccessibilityBurstSuppressionShortcut(_ event: NSEvent) -> Bool {
+            guard event.type == .keyDown else { return false }
+            guard event.charactersIgnoringModifiers?.lowercased() == "x" else { return false }
+
+            let relevantModifiers = event.modifierFlags.intersection([
+                .shift,
+                .control,
+                .option,
+                .command,
+                .function,
+            ])
+            return relevantModifiers == [.shift, .function]
+        }
+
+        static func isAccessibilityLastOutputStartShortcut(_ event: NSEvent) -> Bool {
+            guard event.type == .keyDown else { return false }
+            let isStartKey = event.charactersIgnoringModifiers == "[" ||
+                event.characters == "{" ||
+                event.keyCode == 0x21
+            guard isStartKey else { return false }
+
+            let relevantModifiers = event.modifierFlags.intersection([
+                .shift,
+                .control,
+                .option,
+                .command,
+                .function,
+            ])
+            return relevantModifiers == [.shift, .function]
+        }
+
+        static func isAccessibilityLastOutputEndShortcut(_ event: NSEvent) -> Bool {
+            guard event.type == .keyDown else { return false }
+            let isEndKey = event.charactersIgnoringModifiers == "]" ||
+                event.characters == "}" ||
+                event.keyCode == 0x1E
+            guard isEndKey else { return false }
+
+            let relevantModifiers = event.modifierFlags.intersection([
+                .shift,
+                .control,
+                .option,
+                .command,
+                .function,
+            ])
+            return relevantModifiers == [.shift, .function]
+        }
+
         /// Special case handling for some control keys
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
             traceInputEvent("performKeyEquivalent.begin", event: event)
@@ -1351,6 +1437,43 @@ extension Ghostty {
             // local event handler).
             if !focused {
                 traceInput("performKeyEquivalent.return unfocused")
+                return false
+            }
+
+            if Self.isAccessibilityPromptShortcut(event) {
+                if returnAccessibilityReviewToPrompt() {
+                    traceInput("performKeyEquivalent.return accessibilityPrompt")
+                    return true
+                }
+
+                traceInput("performKeyEquivalent.return accessibilityPromptDisabled")
+                return false
+            }
+            if Self.isAccessibilityBurstSuppressionShortcut(event) {
+                if toggleAccessibilityBurstSuppression() {
+                    traceInput("performKeyEquivalent.return accessibilityBurstSuppression")
+                    return true
+                }
+
+                traceInput("performKeyEquivalent.return accessibilityBurstSuppressionDisabled")
+                return false
+            }
+            if Self.isAccessibilityLastOutputStartShortcut(event) {
+                if returnAccessibilityReviewToLastCommandOutput(anchor: .start) {
+                    traceInput("performKeyEquivalent.return accessibilityLastOutputStart")
+                    return true
+                }
+
+                traceInput("performKeyEquivalent.return accessibilityLastOutputStartDisabled")
+                return false
+            }
+            if Self.isAccessibilityLastOutputEndShortcut(event) {
+                if returnAccessibilityReviewToLastCommandOutput(anchor: .end) {
+                    traceInput("performKeyEquivalent.return accessibilityLastOutputEnd")
+                    return true
+                }
+
+                traceInput("performKeyEquivalent.return accessibilityLastOutputEndDisabled")
                 return false
             }
 

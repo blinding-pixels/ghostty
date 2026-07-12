@@ -300,5 +300,22 @@ extension Ghostty.SurfaceView {
         let lastMeaningfulLine: String?
         let semanticOutput: Bool
         let source: String
+        let commandOutputText: String?
+    }
+
+    struct AccessibilityCommandOutputSnapshot {
+        let text: String
+        let source: String
+        let generation: Int
+    }
+
+    enum AccessibilityCommandOutputAnchor {
+        case start
+        case end
+    }
+
+    struct AccessibilityCommandOutputAnchorTarget {
+        let range: NSRange
+        let spokenLine: String
     }
 }

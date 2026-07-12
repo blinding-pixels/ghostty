@@ -30,7 +30,10 @@ extension Ghostty.SurfaceView {
         accessibilityIOFloodWindow = nil
         accessibilityPostFloodTextSyncPending = false
         lastAccessibilityCommandStatus = nil
+        lastAccessibilityCommandOutputSnapshot = nil
         accessibilitySecureAnnouncementPending = enabled && passwordInput
+        accessibilityBurstSuppressionEnabled = true
+        clearAccessibilityReviewSelection()
         invalidateAccessibilityTextProjection()
 
         if enabled {
@@ -223,8 +226,14 @@ extension Ghostty.SurfaceView {
         lastAccessibilityNotifiedGeneration = change.generation
         lastAccessibilityProjectionGeneration = change.generation
 
+        let oldReviewProjection = accessibilityReviewSelectedRange.map { _ in
+            cachedAccessibilityTextProjection.get()
+        }
         invalidateAccessibilityTextProjection()
         let newProjection = cachedAccessibilityTextProjection.get()
+        reconcileAccessibilityReviewSelection(
+            from: oldReviewProjection,
+            to: newProjection)
         lastAccessibilityNotifiedProjection = newProjection
         let lineMetrics = oldProjection.map {
             accessibilityProjectionLineMetrics(

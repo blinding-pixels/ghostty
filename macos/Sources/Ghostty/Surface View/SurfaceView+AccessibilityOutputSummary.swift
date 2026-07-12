@@ -2,19 +2,42 @@ import AppKit
 import GhosttyKit
 
 extension Ghostty.SurfaceView {
-    func readAccessibilityCommandOutputSummary(
-        fallback: AccessibilityCommandOutputSummary
-    ) -> AccessibilityCommandOutputSummary {
+    func readAccessibilityCommandOutputText() -> String? {
         guard let surface else {
-            return fallback
+            return nil
         }
 
         var text = ghostty_text_s()
-        guard ghostty_surface_accessibility_command_output(surface, &text),
-              let value = Self.string(from: text.text, count: Int(text.text_len)) else {
-            return fallback
+        guard ghostty_surface_accessibility_command_output(surface, &text) else {
+            return nil
         }
         defer { ghostty_surface_free_text(surface, &text) }
+
+        return Self.string(from: text.text, count: Int(text.text_len))
+    }
+
+    func readAccessibilityCommandOutputSnapshot() -> AccessibilityCommandOutputSnapshot? {
+        if let text = readAccessibilityCommandOutputText(),
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return AccessibilityCommandOutputSnapshot(
+                text: text,
+                source: "semantic",
+                generation: lastAccessibilityNotifiedGeneration)
+        }
+
+        guard let snapshot = lastAccessibilityCommandOutputSnapshot,
+              !snapshot.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return snapshot
+    }
+
+    func readAccessibilityCommandOutputSummary(
+        fallback: AccessibilityCommandOutputSummary
+    ) -> AccessibilityCommandOutputSummary {
+        guard let value = readAccessibilityCommandOutputText() else {
+            return fallback
+        }
 
         var lines = value.split(
             separator: "\n",
@@ -34,7 +57,8 @@ extension Ghostty.SurfaceView {
             lineCount: lines.count,
             lastMeaningfulLine: lastMeaningfulLine,
             semanticOutput: true,
-            source: "semantic")
+            source: "semantic",
+            commandOutputText: value)
     }
 
     static func accessibilitySummaryLine(_ line: String) -> String {
@@ -57,6 +81,175 @@ extension Ghostty.SurfaceView {
     static func accessibilityVisibleLineLabel(_ count: Int) -> String {
         count == 1 ? "1 visible line" : "\(count) visible lines"
     }
+
+    static func accessibilityCommandOutputAnchorTarget(
+        commandOutput: String,
+        in projection: AccessibilityTextProjection,
+        anchor: AccessibilityCommandOutputAnchor
+    ) -> AccessibilityCommandOutputAnchorTarget? {
+        let projectionText = projection.text as NSString
+        guard projectionText.length > 0 else { return nil }
+
+        let searchCandidates = accessibilityCommandOutputSearchCandidates(
+            commandOutput,
+            anchor: anchor)
+        for candidate in searchCandidates {
+            let outputRange = projectionText.range(
+                of: candidate,
+                options: [.backwards])
+            guard outputRange.location != NSNotFound else { continue }
+
+            if let lineRange = accessibilityMeaningfulCommandOutputLineRange(
+                in: projectionText,
+                outputRange: outputRange,
+                anchor: anchor) {
+                let line = projectionText.substring(with: lineRange)
+                return AccessibilityCommandOutputAnchorTarget(
+                    range: NSRange(location: lineRange.location, length: 0),
+                    spokenLine: accessibilitySummaryLine(line))
+            }
+        }
+
+        return nil
+    }
+
+    static func accessibilityCommandOutputSearchCandidates(
+        _ commandOutput: String,
+        anchor: AccessibilityCommandOutputAnchor
+    ) -> [String] {
+        var candidates: [String] = []
+
+        func append(_ value: String) {
+            guard !value.isEmpty, !candidates.contains(value) else { return }
+            candidates.append(value)
+        }
+
+        append(commandOutput)
+        append(commandOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        let meaningfulLines = commandOutput.split(
+            separator: "\n",
+            omittingEmptySubsequences: false)
+            .map(String.init)
+            .filter { !accessibilitySummaryLine($0).isEmpty }
+
+        if anchor == .end,
+           let last = meaningfulLines.last {
+            append(last)
+        }
+
+        return candidates
+    }
+
+    static func accessibilityMeaningfulCommandOutputLineRange(
+        in projectionText: NSString,
+        outputRange: NSRange,
+        anchor: AccessibilityCommandOutputAnchor
+    ) -> NSRange? {
+        guard outputRange.location != NSNotFound,
+              outputRange.length > 0 else { return nil }
+
+        var cursor = outputRange.location
+        let end = min(NSMaxRange(outputRange), projectionText.length)
+        let boundedOutputRange = NSRange(
+            location: outputRange.location,
+            length: end - outputRange.location)
+        var ranges: [NSRange] = []
+
+        while cursor < end {
+            var lineRange = projectionText.lineRange(
+                for: NSRange(location: cursor, length: 0))
+            lineRange = NSIntersectionRange(lineRange, boundedOutputRange)
+            let contentRange = accessibilityLineContentRange(
+                in: projectionText,
+                lineRange: lineRange)
+
+            if contentRange.length > 0 {
+                let line = projectionText.substring(with: contentRange)
+                if !accessibilitySummaryLine(line).isEmpty {
+                    ranges.append(contentRange)
+                }
+            }
+
+            cursor = max(NSMaxRange(lineRange), cursor + 1)
+        }
+
+        switch anchor {
+        case .start:
+            return ranges.first
+        case .end:
+            return ranges.last
+        }
+    }
+
+    static func accessibilityLineContentRange(
+        in text: NSString,
+        lineRange: NSRange
+    ) -> NSRange {
+        guard lineRange.location != NSNotFound else { return lineRange }
+
+        var range = NSIntersectionRange(
+            lineRange,
+            NSRange(location: 0, length: text.length))
+        while range.length > 0 {
+            let lastIndex = NSMaxRange(range) - 1
+            let character = text.character(at: lastIndex)
+            if character == 10 || character == 13 {
+                range.length -= 1
+            } else {
+                break
+            }
+        }
+        return range
+    }
+
+    func returnAccessibilityReviewToLastCommandOutput(
+        anchor: AccessibilityCommandOutputAnchor
+    ) -> Bool {
+        guard accessibilityPipelineEnabled else { return false }
+        guard window?.makeFirstResponder(self) == true else { return false }
+
+        guard let commandOutputSnapshot = readAccessibilityCommandOutputSnapshot() else {
+            _ = returnAccessibilityReviewToPrompt()
+            announceAccessibility("No output for last command", priority: .high)
+            traceAccessibilityCue("commandOutputAnchor missingOutput anchor=\(anchor)")
+            return true
+        }
+
+        let projection = currentAccessibilityTextProjection()
+        guard let target = Self.accessibilityCommandOutputAnchorTarget(
+            commandOutput: commandOutputSnapshot.text,
+            in: projection,
+            anchor: anchor) else {
+            announceAccessibility(
+                "Last command output is outside the review window",
+                priority: .high)
+            traceAccessibilityCue(
+                "commandOutputAnchor missingRange anchor=\(anchor) source=\(commandOutputSnapshot.source) outputGeneration=\(commandOutputSnapshot.generation) outputUTF16=\(commandOutputSnapshot.text.utf16.count) projectionUTF16=\(projection.utf16Length)")
+            return true
+        }
+
+        accessibilityReviewSelectedRange = clampedAccessibilityRange(
+            target.range,
+            length: projection.utf16Length)
+        NSAccessibility.post(
+            element: self,
+            notification: .selectedTextChanged,
+            userInfo: accessibilitySelectedTextChangedUserInfo(
+                changeType: AccessibilityTextNotification.TextStateChangeType.selectionMove,
+                focusChanged: true))
+
+        let prefix = anchor == .start
+            ? "Start of last command output"
+            : "End of last command output"
+        announceAccessibility(
+            "\(prefix): \(target.spokenLine)",
+            priority: .high)
+        traceAccessibilityCue(
+            "commandOutputAnchor anchor=\(anchor) source=\(commandOutputSnapshot.source) outputGeneration=\(commandOutputSnapshot.generation) range={\(target.range.location),\(target.range.length)} line=\(Self.traceString(target.spokenLine))")
+        return true
+    }
+
     static func accessibilityCursorLine(
         in projection: AccessibilityTextProjection
     ) -> String? {
@@ -170,7 +363,8 @@ extension Ghostty.SurfaceView {
                 lineCount: estimatedLineCount,
                 lastMeaningfulLine: fallbackLastLine,
                 semanticOutput: false,
-                source: "visibleEstimate")
+                source: "visibleEstimate",
+                commandOutputText: nil)
         }
 
         let insertedLines = Self.accessibilityInsertedOutputLines(
@@ -183,16 +377,19 @@ extension Ghostty.SurfaceView {
                 lineCount: estimatedLineCount,
                 lastMeaningfulLine: fallbackLastLine,
                 semanticOutput: false,
-                source: "visibleEstimate")
+                source: "visibleEstimate",
+                commandOutputText: nil)
         }
 
+        let commandOutputText = insertedLines.joined(separator: "\n")
         return AccessibilityCommandOutputSummary(
             lineCount: insertedLines.count,
             lastMeaningfulLine: Self.accessibilityLastMeaningfulLine(
                 in: insertedLines,
                 excluding: cursorLine) ?? fallbackLastLine,
             semanticOutput: false,
-            source: "projectionDiff")
+            source: "projectionDiff",
+            commandOutputText: commandOutputText)
     }
 
     func noteAccessibilityFloodSignal(
@@ -203,6 +400,10 @@ extension Ghostty.SurfaceView {
         guard accessibilityPipelineEnabled else { return }
         guard window?.firstResponder === self else { return }
         guard !change.usesAlternateScreen else { return }
+        guard accessibilityBurstSuppressionEnabled else {
+            accessibilityIOFloodWindow = nil
+            return
+        }
 
         var window = accessibilityIOFloodWindow ?? AccessibilityIOFloodWindow(startedAt: now)
         window.accumulate(
@@ -239,6 +440,7 @@ extension Ghostty.SurfaceView {
 
         guard ioFloodSignal else { return }
 
+        lastAccessibilityCommandOutputSnapshot = nil
         let recentCommandStatus: AccessibilityCommandStatus? = {
             guard let status = lastAccessibilityCommandStatus,
                   now - status.finishedAt <= Self.accessibilityCommandStatusTTL else {
@@ -309,6 +511,12 @@ extension Ghostty.SurfaceView {
     func flushAccessibilityFloodSummary() {
         guard accessibilityPipelineEnabled else { return }
         guard window?.firstResponder === self else { return }
+        guard accessibilityBurstSuppressionEnabled else {
+            accessibilityFloodSettleWorkItem = nil
+            accessibilityFloodState = nil
+            accessibilityIOFloodWindow = nil
+            return
+        }
         guard var state = accessibilityFloodState else {
             accessibilityIOFloodWindow = nil
             return
@@ -335,6 +543,18 @@ extension Ghostty.SurfaceView {
 
         let fallback = accessibilityFallbackCommandOutputSummary(for: state)
         let summary = readAccessibilityCommandOutputSummary(fallback: fallback)
+        if let commandOutputText = summary.commandOutputText,
+           !commandOutputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let generation = state.latestProjection?.changeInfo.generation ??
+                lastAccessibilityNotifiedGeneration
+            lastAccessibilityCommandOutputSnapshot = AccessibilityCommandOutputSnapshot(
+                text: commandOutputText,
+                source: summary.source,
+                generation: generation)
+        } else {
+            lastAccessibilityCommandOutputSnapshot = nil
+        }
+
         let lineLabel = summary.source == "visibleEstimate"
             ? Self.accessibilityVisibleLineLabel(summary.lineCount)
             : Self.accessibilityLineLabel(summary.lineCount)
@@ -367,14 +587,20 @@ extension Ghostty.SurfaceView {
         announceAccessibility(message, priority: priority)
         accessibilityPostFloodTextSyncPending = true
         traceAccessibilityCue(
-            "floodSummary source=\(summary.source) semanticOutput=\(summary.semanticOutput) lineCount=\(summary.lineCount) exitCode=\(status?.exitCode.map(String.init) ?? "nil") message=\(Self.traceString(message))")
+            "floodSummary source=\(summary.source) semanticOutput=\(summary.semanticOutput) reviewableOutput=\(summary.commandOutputText != nil) lineCount=\(summary.lineCount) exitCode=\(status?.exitCode.map(String.init) ?? "nil") message=\(Self.traceString(message))")
     }
 
     func refreshAccessibilityProjectionAfterFlood() -> AccessibilityTextProjection? {
         guard !passwordInput else { return nil }
 
+        let oldReviewProjection = accessibilityReviewSelectedRange.map { _ in
+            cachedAccessibilityTextProjection.get()
+        }
         invalidateAccessibilityTextProjection()
         let projection = cachedAccessibilityTextProjection.get()
+        reconcileAccessibilityReviewSelection(
+            from: oldReviewProjection,
+            to: projection)
         lastAccessibilityProjectionGeneration = projection.changeInfo.generation
         lastAccessibilityNotifiedGeneration = projection.changeInfo.generation
         lastAccessibilityNotifiedProjection = projection
@@ -410,6 +636,33 @@ extension Ghostty.SurfaceView {
             return false
         }
 
+        return true
+    }
+
+    func toggleAccessibilityBurstSuppression() -> Bool {
+        guard accessibilityPipelineEnabled else { return false }
+
+        accessibilityBurstSuppressionEnabled.toggle()
+        accessibilityFloodSettleWorkItem?.cancel()
+        accessibilityFloodSettleWorkItem = nil
+        let hadFloodState = accessibilityFloodState != nil
+        accessibilityFloodState = nil
+        accessibilityIOFloodWindow = nil
+        accessibilityPostFloodTextSyncPending = false
+        if hadFloodState {
+            lastAccessibilityCommandOutputSnapshot = nil
+        }
+
+        if !accessibilityBurstSuppressionEnabled, hadFloodState {
+            _ = refreshAccessibilityProjectionAfterFlood()
+        }
+
+        let message = accessibilityBurstSuppressionEnabled
+            ? "Burst suppression on"
+            : "Burst suppression off"
+        announceAccessibility(message, priority: .high)
+        traceAccessibilityCue(
+            "burstSuppressionToggle enabled=\(accessibilityBurstSuppressionEnabled)")
         return true
     }
 }

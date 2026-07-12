@@ -13,12 +13,20 @@ extension Ghostty.SurfaceView {
         return .textArea
     }
 
+    override func accessibilityRoleDescription() -> String {
+        return "interactive terminal text area"
+    }
+
     override func accessibilityLabel() -> String? {
         return "Terminal"
     }
 
+    override func accessibilityIdentifier() -> String {
+        return "GhosttyTerminalTextArea"
+    }
+
     override func accessibilityHelp() -> String? {
-        return "Terminal content area"
+        return "Interactive terminal content area"
     }
 
     override func isAccessibilityFocused() -> Bool {
@@ -235,7 +243,7 @@ extension Ghostty.SurfaceView {
         return NSAttributedString(string: plainString, attributes: attributes)
     }
 
-    private func clampedAccessibilityRange(_ range: NSRange?, length: Int) -> NSRange? {
+    func clampedAccessibilityRange(_ range: NSRange?, length: Int) -> NSRange? {
         guard let range else { return nil }
         guard range.location != NSNotFound else { return nil }
 
