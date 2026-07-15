@@ -341,6 +341,7 @@ pub const StreamHandler = struct {
             .start_hyperlink => try self.startHyperlink(value.uri, value.id),
             .clipboard_contents => try self.clipboardContents(value.kind, value.data),
             .semantic_prompt => try self.semanticPrompt(value),
+            .semantic_accessibility => try self.semanticAccessibility(value.data),
             .mouse_shape => try self.setMouseShape(value),
             .configure_charset => self.configureCharset(value.slot, value.charset),
             .set_attribute => {
@@ -1135,6 +1136,21 @@ pub const StreamHandler = struct {
         // We do this last so failures are still processed correctly
         // above.
         try self.terminal.semanticPrompt(cmd);
+    }
+
+    fn semanticAccessibility(self: *StreamHandler, data: []const u8) !void {
+        const max_payload_size = 32 * 1024;
+        if (data.len > max_payload_size) {
+            log.warn("ignoring oversized semantic accessibility payload size={}", .{data.len});
+            return;
+        }
+
+        self.surfaceMessageWriter(.{
+            .semantic_accessibility = try apprt.surface.Message.WriteReq.init(
+                self.alloc,
+                data,
+            ),
+        });
     }
 
     fn reportPwd(self: *StreamHandler, url: []const u8) !void {

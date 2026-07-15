@@ -228,6 +228,7 @@
 				"Ghostty/Surface View/SurfaceView+AccessibilityProjection.swift",
 				"Ghostty/Surface View/SurfaceView+AccessibilityTrace.swift",
 				"Ghostty/Surface View/SurfaceView+AccessibilityTypes.swift",
+				"Ghostty/Surface View/SurfaceView+SemanticAccessibility.swift",
 				Helpers/AppInfo.swift,
 				Helpers/CodableBridge.swift,
 				Helpers/Cursor.swift,

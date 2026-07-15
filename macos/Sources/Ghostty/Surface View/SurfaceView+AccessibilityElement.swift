@@ -29,6 +29,10 @@ extension Ghostty.SurfaceView {
         return "Interactive terminal content area"
     }
 
+    override func accessibilityChildren() -> [Any]? {
+        semanticAccessibilityChildren() ?? super.accessibilityChildren()
+    }
+
     override func isAccessibilityFocused() -> Bool {
         return window?.firstResponder === self
     }

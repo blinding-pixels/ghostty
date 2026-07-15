@@ -242,6 +242,7 @@ extension Ghostty {
         var accessibilityReviewSelectedRange: NSRange?
         var accessibilityPipelineEnabled = false
         var accessibilityBurstSuppressionEnabled = true
+        var semanticAccessibilityState = SemanticAccessibilityState()
 
         static let accessibilityTextUpdateDelay: DispatchTimeInterval = .milliseconds(35)
         static let accessibilityIOFloodWindowMs: TimeInterval = 0.100

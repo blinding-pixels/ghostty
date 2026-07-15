@@ -91,6 +91,9 @@ pub const Message = union(enum) {
     /// The terminal accessibility projection changed.
     screen_changed: apprt.action.ScreenChanged,
 
+    /// A semantic accessibility record was emitted by the foreground program.
+    semantic_accessibility: WriteReq,
+
     /// Report the progress of an action using a GUI element
     progress_report: terminal.osc.Command.ProgressReport,
 

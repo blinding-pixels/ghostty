@@ -644,6 +644,12 @@ extension Ghostty {
             case GHOSTTY_ACTION_SCREEN_CHANGED:
                 screenChanged(app, target: target, v: action.action.screen_changed)
 
+            case GHOSTTY_ACTION_SEMANTIC_ACCESSIBILITY:
+                semanticAccessibility(
+                    app,
+                    target: target,
+                    v: action.action.semantic_accessibility)
+
             case GHOSTTY_ACTION_CLOSE_ALL_WINDOWS:
                 closeAllWindows(app, target: target)
 
@@ -2088,6 +2094,31 @@ extension Ghostty {
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
 
                 surfaceView.accessibilityScreenChanged(Ghostty.Action.ScreenChanged(c: v))
+
+            default:
+                assertionFailure()
+            }
+        }
+
+        private static func semanticAccessibility(
+            _ app: ghostty_app_t,
+            target: ghostty_target_s,
+            v: ghostty_action_semantic_accessibility_s
+        ) {
+            switch target.tag {
+            case GHOSTTY_TARGET_APP:
+                Ghostty.logger.warning(
+                    "semantic accessibility does nothing with an app target")
+                return
+
+            case GHOSTTY_TARGET_SURFACE:
+                guard let surface = target.target.surface else { return }
+                guard let surfaceView = self.surfaceView(from: surface) else { return }
+
+                let data = Data(bytes: v.data, count: v.len)
+                DispatchQueue.main.async {
+                    surfaceView.receiveSemanticAccessibilityPayload(data)
+                }
 
             default:
                 assertionFailure()

@@ -160,6 +160,9 @@ pub const Command = union(Key) {
     /// https://uapi-group.org/specifications/specs/osc_context/
     context_signal: parsers.context_signal.Command,
 
+    /// Private semantic accessibility payload emitted by the Pi research fork.
+    semantic_accessibility: [:0]const u8,
+
     pub const SemanticPrompt = parsers.semantic_prompt.Command;
 
     pub const KittyClipboardProtocol = parsers.kitty_clipboard_protocol.OSC;
@@ -193,6 +196,7 @@ pub const Command = union(Key) {
             "kitty_text_sizing",
             "kitty_clipboard_protocol",
             "context_signal",
+            "semantic_accessibility",
         },
     );
 
@@ -344,6 +348,9 @@ pub const Parser = struct {
         @"52",
         @"55",
         @"66",
+        @"69",
+        @"697",
+        @"6973",
         @"77",
         @"104",
         @"110",
@@ -422,6 +429,7 @@ pub const Parser = struct {
             .kitty_text_sizing,
             .kitty_clipboard_protocol,
             .context_signal,
+            .semantic_accessibility,
             => {},
         }
 
@@ -674,6 +682,22 @@ pub const Parser = struct {
 
             .@"6" => switch (c) {
                 '6' => self.state = .@"66",
+                '9' => self.state = .@"69",
+                else => self.state = .invalid,
+            },
+
+            .@"69" => switch (c) {
+                '7' => self.state = .@"697",
+                else => self.state = .invalid,
+            },
+
+            .@"697" => switch (c) {
+                '3' => self.state = .@"6973",
+                else => self.state = .invalid,
+            },
+
+            .@"6973" => switch (c) {
+                ';' => self.captureTrailing(.allocating),
                 else => self.state = .invalid,
             },
 
@@ -804,6 +828,12 @@ pub const Parser = struct {
             .@"6" => null,
 
             .@"66" => parsers.kitty_text_sizing.parse(self, terminator_ch),
+
+            .@"69",
+            .@"697",
+            => null,
+
+            .@"6973" => parsers.semantic_accessibility.parse(self, terminator_ch),
 
             .@"77" => null,
 

@@ -215,6 +215,13 @@ extension Ghostty.SurfaceView {
 
         guard change.generation != lastAccessibilityNotifiedGeneration else { return }
 
+        if semanticAccessibilityState.suppressesTerminalOutput {
+            _ = refreshAccessibilityProjectionAfterFlood()
+            traceAccessibilityCue(
+                "suppressedSemanticApplicationOutput generation=\(change.generation)")
+            return
+        }
+
         if accessibilityFloodState != nil {
             lastAccessibilityNotifiedGeneration = change.generation
             traceAccessibilityCue(

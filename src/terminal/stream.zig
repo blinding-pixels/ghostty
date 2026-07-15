@@ -125,6 +125,7 @@ pub const Action = union(Key) {
     kitty_color_report: kitty.color.OSC,
     color_operation: ColorOperation,
     semantic_prompt: SemanticPrompt,
+    semantic_accessibility: SemanticAccessibility,
 
     pub const Key = lib.Enum(
         lib.target,
@@ -222,6 +223,7 @@ pub const Action = union(Key) {
             "kitty_color_report",
             "color_operation",
             "semantic_prompt",
+            "semantic_accessibility",
         },
     );
 
@@ -400,6 +402,16 @@ pub const Action = union(Key) {
     };
 
     pub const SemanticPrompt = osc.Command.SemanticPrompt;
+
+    pub const SemanticAccessibility = struct {
+        data: []const u8,
+
+        pub const C = lib.String;
+
+        pub fn cval(self: SemanticAccessibility) SemanticAccessibility.C {
+            return .init(self.data);
+        }
+    };
 };
 
 /// Returns a type that can process a stream of tty control characters.
@@ -2045,6 +2057,10 @@ pub fn Stream(comptime H: type) type {
 
                 .conemu_progress_report => |v| {
                     self.handler.vt(.progress_report, v);
+                },
+
+                .semantic_accessibility => |data| {
+                    self.handler.vt(.semantic_accessibility, .{ .data = data });
                 },
 
                 .conemu_sleep,

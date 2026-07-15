@@ -928,6 +928,12 @@ typedef struct {
   uint8_t output_scroll_lines;
 } ghostty_action_screen_changed_s;
 
+// apprt.action.SemanticAccessibility
+typedef struct {
+  const uint8_t *data;
+  size_t len;
+} ghostty_action_semantic_accessibility_s;
+
 // apprt.Action.Key
 typedef enum {
   GHOSTTY_ACTION_QUIT,
@@ -997,6 +1003,7 @@ typedef enum {
   GHOSTTY_ACTION_READONLY,
   GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD,
   GHOSTTY_ACTION_SCREEN_CHANGED,
+  GHOSTTY_ACTION_SEMANTIC_ACCESSIBILITY,
 } ghostty_action_tag_e;
 
 typedef union {
@@ -1039,6 +1046,7 @@ typedef union {
   ghostty_action_search_selected_s search_selected;
   ghostty_action_readonly_e readonly;
   ghostty_action_screen_changed_s screen_changed;
+  ghostty_action_semantic_accessibility_s semantic_accessibility;
 } ghostty_action_u;
 
 typedef struct {

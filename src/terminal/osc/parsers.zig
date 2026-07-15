@@ -15,6 +15,7 @@ pub const osc9 = @import("parsers/osc9.zig");
 pub const report_pwd = @import("parsers/report_pwd.zig");
 pub const rxvt_extension = @import("parsers/rxvt_extension.zig");
 pub const semantic_prompt = @import("parsers/semantic_prompt.zig");
+pub const semantic_accessibility = @import("parsers/semantic_accessibility.zig");
 
 test {
     std.testing.refAllDecls(@This());

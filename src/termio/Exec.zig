@@ -745,6 +745,7 @@ const Subprocess = struct {
         // which terminal emulator and version they're running under.
         try env.put("TERM_PROGRAM", "ghostty");
         try env.put("TERM_PROGRAM_VERSION", build_config.version_string);
+        try env.put("GHOSTTY_SEMANTIC_ACCESSIBILITY", "1");
 
         // VTE_VERSION is set by gnome-terminal and other VTE-based terminals.
         // We don't want our child processes to think we're running under VTE.

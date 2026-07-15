@@ -1120,6 +1120,17 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
             };
         },
 
+        .semantic_accessibility => |payload| {
+            defer payload.deinit();
+            _ = self.rt_app.performAction(
+                .{ .surface = self },
+                .semantic_accessibility,
+                .{ .data = payload.slice() },
+            ) catch |err| {
+                log.warn("apprt failed to deliver semantic accessibility payload={}", .{err});
+            };
+        },
+
         .progress_report => |v| {
             _ = self.rt_app.performAction(
                 .{ .surface = self },

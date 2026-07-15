@@ -400,6 +400,10 @@ extension Ghostty.SurfaceView {
         guard accessibilityPipelineEnabled else { return }
         guard window?.firstResponder === self else { return }
         guard !change.usesAlternateScreen else { return }
+        guard !semanticAccessibilityState.suppressesTerminalOutput else {
+            accessibilityIOFloodWindow = nil
+            return
+        }
         guard accessibilityBurstSuppressionEnabled else {
             accessibilityIOFloodWindow = nil
             return

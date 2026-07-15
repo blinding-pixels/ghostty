@@ -350,6 +350,9 @@ pub const Action = union(Key) {
     /// The terminal accessibility projection changed.
     screen_changed: ScreenChanged,
 
+    /// A semantic accessibility record from the foreground application.
+    semantic_accessibility: SemanticAccessibility,
+
     /// Sync with: ghostty_action_tag_e
     pub const Key = enum(c_int) {
         quit,
@@ -419,6 +422,7 @@ pub const Action = union(Key) {
         readonly,
         copy_title_to_clipboard,
         screen_changed,
+        semantic_accessibility,
 
         test "ghostty.h Action.Key" {
             try lib.checkGhosttyHEnum(Key, "GHOSTTY_ACTION_");
@@ -1040,6 +1044,22 @@ pub const ScreenChanged = extern struct {
 
     fn intCastSaturated(comptime T: type, value: anytype) T {
         return std.math.cast(T, value) orelse std.math.maxInt(T);
+    }
+};
+
+pub const SemanticAccessibility = struct {
+    data: []const u8,
+
+    pub const C = extern struct {
+        data: [*]const u8,
+        len: usize,
+    };
+
+    pub fn cval(self: SemanticAccessibility) C {
+        return .{
+            .data = self.data.ptr,
+            .len = self.data.len,
+        };
     }
 };
 
